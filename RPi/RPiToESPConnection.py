@@ -1,7 +1,13 @@
+import platform
 import serial
 import time
 
-esp = serial.Serial('/dev/ttyUSB0', 115200)
+if platform.system() == "Windows":
+    PORT = "COM4"          # Change to your ESP32's COM port
+else:
+    PORT = "/dev/ttyUSB0"  # Raspberry Pi
+
+esp = serial.Serial(PORT, 115200)
 
 time.sleep(2)
 
