@@ -2,7 +2,6 @@
 
 const int ENA = 25;
 const int ENB = 33;
-
 const int IN1 = 13;
 const int IN2 = 14;
 const int IN3 = 26;
@@ -10,14 +9,11 @@ const int IN4 = 27;
 
 const int pwmFreq = 1000;
 const int pwmResolution = 8;
-
 const int leftMotorChannel = 0;
 const int rightMotorChannel = 1;
-int counter = 0;
 
 void setup() {
   Serial.begin(115200);
-  
 
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
@@ -26,7 +22,6 @@ void setup() {
 
   ledcSetup(leftMotorChannel, pwmFreq, pwmResolution);
   ledcSetup(rightMotorChannel, pwmFreq, pwmResolution);
-
   ledcAttachPin(ENA, leftMotorChannel);
   ledcAttachPin(ENB, rightMotorChannel);
 
@@ -37,41 +32,23 @@ void setup() {
   digitalWrite(IN4, LOW);
 }
 
-void startMotors(){
-  Serial.printf("starting motors\n");
-
-  ledcWrite(leftMotorChannel, 128);
-  ledcWrite(rightMotorChannel, 128);
-  delay(3000);
-
-  // Full speed
-  ledcWrite(leftMotorChannel, 255);
-  ledcWrite(rightMotorChannel, 255);
-  delay(3000);
-}
-
-void stopMotors(){
-  Serial.printf("stopping motors\n");
-  ledcWrite(leftMotorChannel, 0);
-  ledcWrite(rightMotorChannel, 0);
-  delay(2000);
-}
-
 void loop() {
-  // Serial.println("Starting motor routine... , counter: " + String(counter));  
-  // counter += 1;
-  // delay(1000);
- // motorRoutine();
-  if (Serial.available()){
+  // Check if Python sent a message
+  if (Serial.available() > 0){
     String line = Serial.readStringUntil('\n');
     line.trim();
-    Serial.printf("received: %s\n", line);
+    
+    // If "start", turn motors on full speed
     if (line == "start"){
-      startMotors();
+      Serial.println("Starting motors...");
+      ledcWrite(leftMotorChannel, 255);
+      ledcWrite(rightMotorChannel, 255);
     }
+    // If "stop", turn motors off immediately
     else if (line == "stop"){
-      stopMotors();
+      Serial.println("Stopping motors...");
+      ledcWrite(leftMotorChannel, 0);
+      ledcWrite(rightMotorChannel, 0);
     }
   }
 }
-
