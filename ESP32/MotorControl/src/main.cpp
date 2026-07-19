@@ -1,54 +1,77 @@
 #include <Arduino.h>
+#include "motors.h"
+#include "ultrasonic.h"
 
-const int ENA = 25;
-const int ENB = 33;
-const int IN1 = 13;
-const int IN2 = 14;
-const int IN3 = 26;
-const int IN4 = 27;
+enum RobotState {
+  STATE_USER_CONTROLLED,
+  STATE_AUTONOMOUS
+};
 
-const int pwmFreq = 1000;
-const int pwmResolution = 8;
-const int leftMotorChannel = 0;
-const int rightMotorChannel = 1;
+RobotState currentState = STATE_USER_CONTROLLED;
 
 void setup() {
+  setupMotors();
+  setupUltrasonic();
   Serial.begin(115200);
-
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
-
-  ledcSetup(leftMotorChannel, pwmFreq, pwmResolution);
-  ledcSetup(rightMotorChannel, pwmFreq, pwmResolution);
-  ledcAttachPin(ENA, leftMotorChannel);
-  ledcAttachPin(ENB, rightMotorChannel);
-
-  // Set direction to Forward
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
 }
 
 void loop() {
-  // Check if Python sent a message
-  if (Serial.available() > 0){
-    String line = Serial.readStringUntil('\n');
-    line.trim();
-    
-    // If "start", turn motors on full speed
-    if (line == "start"){
-      Serial.println("Starting motors...");
-      ledcWrite(leftMotorChannel, 255);
-      ledcWrite(rightMotorChannel, 255);
+  ObstacleAvoidance();
+
+  if (Serial.available () > 0) {
+    char command = Serial.read();
+
+    if (command == 'U') {
+      currentState = STATE_USER_CONTROLLED;
+      stopMotors();
     }
-    // If "stop", turn motors off immediately
-    else if (line == "stop"){
-      Serial.println("Stopping motors...");
-      ledcWrite(leftMotorChannel, 0);
-      ledcWrite(rightMotorChannel, 0);
+    else if (command == 'A'){
+      currentState = STATE_AUTONOMOUS;
+    }
+
+    if (currentState == STATE_USER_CONTROLLED) {
+      switch (command) {
+        case 'W': driveForward(150); break;
+        case 'A': turnLeft(150); break;
+        case 'S': driveBackward(150); break;
+        case 'D': turnRight(150); break;
+        case 'V': stopMotors(); break;
+        default: break;
+      }
+    }
+    
+  }
+
+  if (currentState == STATE_AUTONOMOUS) {
+    
+    bool avoidedWall = ObstacleAvoidance();
+    if (!avoidedWall){
+      driveForward(150);
     }
   }
 }
+
+
+// void loop() {
+//   // Check if Python sent a message
+//   if (Serial.available() > 0){
+//     String line = Serial.readStringUntil('\n');
+//     line.trim();
+    
+//     // If "start", turn motors on full speed
+//     if (line == "start"){
+//       Serial.println("Starting motors...");
+//       ledcWrite(leftMotorChannel, 255);
+//       ledcWrite(rightMotorChannel, 255);
+//     }
+//     // If "stop", turn motors off immediately
+//     else if (line == "stop"){
+//       Serial.println("Stopping motors...");
+//       ledcWrite(leftMotorChannel, 0);
+//       ledcWrite(rightMotorChannel, 0);
+//     }
+//     if (line == "autonomous"){
+//       Serial.println("Autonomous mode started")
+//     }
+//   }
+// }
