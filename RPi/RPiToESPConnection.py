@@ -39,20 +39,23 @@ while True:
         print("Shifting state: User Controlled (M)")
         esp.write(b'M')
     elif user_command == "auto":
-        print("Shifting state: Fully Autonomous (A)")
-        esp.write(b'A')
+        print("Shifting state: Fully Autonomous (T)")
+        esp.write(b'T')
         
     # Manual directional steering overrides
     elif user_command == "w":
-        print("Sending: Forward (F)")
-        esp.write(b'F')
-    elif user_command == "a":
-        print("Sending: Turn Left (L)")
-        esp.write(b'L')
-    elif user_command == "d":
-        print("Sending: Turn Right (R)")
-        esp.write(b'R')
+        print("Sending: Forward (W)")
+        esp.write(b'W')
     elif user_command == "s":
+        print("Sending: Backward (S)")
+        esp.write(b'S')
+    elif user_command == "a":
+        print("Sending: Turn Left (A)")
+        esp.write(b'A')
+    elif user_command == "d":
+        print("Sending: Turn Right (D)")
+        esp.write(b'D')
+    elif user_command == "v":
         print("Sending: Stop (V)")
         esp.write(b'V')
         
