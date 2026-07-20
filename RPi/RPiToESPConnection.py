@@ -1,7 +1,7 @@
 import serial
 import time
 
-# Set up the serial connection to the ESP
+# Set up the serial connection using your verified USB port
 try:
     esp = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
     print("Serial port connected successfully.")
@@ -13,30 +13,51 @@ except Exception as e:
 time.sleep(2)
 
 print("\n=============================================")
-print("--- TERMINAL MOTOR CONTROL READY ---")
-print("Type 'start' and press Enter to run motors.")
-print("Type 'stop' and press Enter to stop motors.")
-print("Type 'exit' and press Enter to quit the script.")
+print("--- TERMINAL STATE & DIRECTION CONTROL ---")
+print("Modes:")
+print("  'manual' -> Switch to User Controlled Mode")
+print("  'auto'   -> Switch to Autonomous Mode")
+print("\nDirections (Manual Mode Only):")
+print("  'w' -> Drive Forward")
+print("  'a' -> Turn Left")
+print("  'd' -> Turn Right")
+print(" 's' -> Drive Backward")
+print("  'v' -> Stop Motors")
+print("\nType 'exit' and press Enter to quit the script.")
 print("=============================================\n")
 
 while True:
-    # Read the text typed into the VS Code terminal
     user_command = input("Enter command: ").strip().lower()
     
-    if user_command == "start":
-        print("Sending START command to ESP...")
-        esp.write(b"start\n")
-        
-    elif user_command == "stop":
-        print("Sending STOP command to ESP...")
-        esp.write(b"stop\n")
-        
-    elif user_command == "exit":
-        print("Closing connection and exiting program.")
+    if user_command == "exit":
+        print("Stopping robot and exiting program.")
+        esp.write(b'V') # Send stop command before closing
         break
         
+    # State switches
+    elif user_command == "manual":
+        print("Shifting state: User Controlled (M)")
+        esp.write(b'M')
+    elif user_command == "auto":
+        print("Shifting state: Fully Autonomous (A)")
+        esp.write(b'A')
+        
+    # Manual directional steering overrides
+    elif user_command == "w":
+        print("Sending: Forward (F)")
+        esp.write(b'F')
+    elif user_command == "a":
+        print("Sending: Turn Left (L)")
+        esp.write(b'L')
+    elif user_command == "d":
+        print("Sending: Turn Right (R)")
+        esp.write(b'R')
+    elif user_command == "s":
+        print("Sending: Stop (V)")
+        esp.write(b'V')
+        
     else:
-        print("⚠️ Invalid command. Please type 'start', 'stop', or 'exit'.")
+        print("⚠️ Invalid command. Type a direction (w/a/d/s) or a state mode (manual/auto).")
 
 # Clean up and close the port when exiting the loop
 esp.close()
