@@ -44,16 +44,22 @@ void loop() {
         case 'D': turnRight(150);     break;
         default:                      break; 
       }
-      return
+      return;
     }
   }
 
   // --- AUTONOMOUS MODE ---
   if (currentState == STATE_AUTONOMOUS) {
-    bool avoided = ObstacleAvoidance();
-    if (!avoided) {
-      driveForward(150);
-    }
-    delay(30); // Gives the ESP32 CPU time to listen for new serial commands
+  long distance = readDistanceCm();
+  
+  // Send distance text across USB serial to the Pi
+  Serial.print("DISTANCE:");
+  Serial.println(distance);
+
+  bool avoided = ObstacleAvoidance();
+  if (!avoided) {
+    driveForward(150);
   }
+  delay(100); // 100ms delay keeps serial clean and readable
+}
 }
