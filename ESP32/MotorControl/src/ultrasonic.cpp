@@ -2,65 +2,76 @@
 #include "ultrasonic.h"
 #include "motors.h"
 
-void setupUltrasonic() {
-    pinMode(TRIG_PIN, OUTPUT);
-    pinMode(ECHO_PIN, INPUT);
+#define TRIG_PIN 32
+#define ECHO_PIN 34
 
-    randomSeed(analogRead(34));
+void setupUltrasonic() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  randomSeed(analogRead(0)); 
 }
 
-long readDistanceCm() {
+// Single function that handles triggering, timing, and 5-sample averaging
+float readDistanceCm() {
   float total = 0;
   int readings = 0;
 
   for (int i = 0; i < 5; i++) {
+    // 1. Send trigger pulse
     digitalWrite(TRIG_PIN, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIG_PIN, LOW);
 
-    long duration = pulseIn(ECHO_PIN, HIGH, 30000); 
+    // 2. Measure echo duration
+    long duration = pulseIn(ECHO_PIN, HIGH, 30000);
 
+    // 3. Convert and validate reading
     if (duration > 0) {
-      float distance = (duration * 0.0343) / 2;
-      
+      float distance = duration * 0.0343 / 2.0;
       if (distance >= 1.0 && distance <= 400.0) {
         total += distance;
         readings++;
       }
     }
-    delay(50); 
+
+    delay(50);
   }
 
-  if (readings == 0) {
-    return -1; 
-  }
-
-  return (long)(total / readings);
-  Serial.println("Distance: " + String(total / readings) + " cm");
+  // Return average or -1 if all 5 failed
+  return (readings > 0) ? (total / readings) : -1.0;
 }
 
 bool ObstacleAvoidance() {
-    long distance = readDistanceCm();
+  float avgDistance = readDistanceCm();
 
-    if (distance <= WALL_THRESHOLD_CM && distance > 0) {
-        stopMotors();
-        delay(500);
+  if (avgDistance != -1.0) {
+    Serial.print("Distance: ");
+    Serial.print(avgDistance);
+    Serial.println(" cm");
+  } else {
+    Serial.println("No valid reading");
+  }
 
-        int choice = random (0, 2);
+  // Obstacle detection (< 20 cm)
+  if (avgDistance > 0 && avgDistance < 20.0) {
+    stopMotors();
+    delay(100);
 
-        if (choice == 0){
-            turnLeft(200);
-            delay(1000);
-        }
-        else {
-            turnRight(200);
-            delay(1000);
-        }
-        delay(500);
-        stopMotors();
-        return true;
+    // Random turn: 0 = Left, 1 = Right
+    if (random(0, 2) == 0) {
+      Serial.println("Obstacle! Turning LEFT...");
+      turnLeft(150);
+    } else {
+      Serial.println("Obstacle! Turning RIGHT...");
+      turnRight(150);
     }
-    return false;
+
+    delay(400);
+    stopMotors();
+    return true;
+  }
+
+  return false;
 }

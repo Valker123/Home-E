@@ -7,7 +7,7 @@ const int ECHO_PIN = 18;
 const int WALL_THRESHOLD_CM = 20;
 
 void setupUltrasonic();
-long readDistanceCm();
+float readDistanceCm();
 bool ObstacleAvoidance();
 
 #endif

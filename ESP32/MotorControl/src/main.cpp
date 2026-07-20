@@ -40,7 +40,7 @@ void loop() {
       switch (command) {
         case 'W': driveForward(150);  break;
         case 'A': turnLeft(150);      break;
-        case 'S': driveBackward(150); break; // Now works without triggering state reset!
+        case 'S': driveBackward(150); break; 
         case 'D': turnRight(150);     break;
         default:                      break; 
       }
