@@ -39,7 +39,6 @@ float readDistanceCm() {
     delay(50);
   }
 
-  // Return average or -1 if all 5 failed
   return (readings > 0) ? (total / readings) : -1.0;
 }
 
