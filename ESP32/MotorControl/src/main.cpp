@@ -18,62 +18,42 @@ void setup() {
 void loop() {
   if (Serial.available() > 0) {
     char command = Serial.read();
-    
+
+    if (command == '\n' || command == '\r') return;
+
     if (command == 'M') {
       currentState = STATE_USER_CONTROLLED;
       stopMotors(); 
+      return;
     } 
     else if (command == 'T') {
       currentState = STATE_AUTONOMOUS;
+      return;
     }
-    else if (command == 'S') {
-      stopMotors(); // Force instant stop in any mode
-      if (currentState == STATE_AUTONOMOUS) {
-        currentState = STATE_USER_CONTROLLED; // Drop back to manual on stop command
-      }
+    else if (command == 'V') { // 'V' is Stop & Reset to Manual
+      stopMotors();
+      currentState = STATE_USER_CONTROLLED;
+      return;
     }
-    
+
     if (currentState == STATE_USER_CONTROLLED) {
       switch (command) {
-        case 'W': driveForward(150); break;
-        case 'A': turnLeft(150);     break;
-        case 'S': driveBackward(150); break;
-        case 'D': turnRight(150);    break;
-        case 'V': stopMotors();      break;
-        default:                     break; 
+        case 'W': driveForward(150);  break;
+        case 'A': turnLeft(150);      break;
+        case 'S': driveBackward(150); break; // Now works without triggering state reset!
+        case 'D': turnRight(150);     break;
+        default:                      break; 
       }
+      return
     }
   }
 
-  // Only run autonomous navigation if state is active
+  // --- AUTONOMOUS MODE ---
   if (currentState == STATE_AUTONOMOUS) {
     bool avoided = ObstacleAvoidance();
     if (!avoided) {
       driveForward(150);
     }
+    delay(30); // Gives the ESP32 CPU time to listen for new serial commands
   }
 }
-
-// void loop() {
-//   // Check if Python sent a message
-//   if (Serial.available() > 0){
-//     String line = Serial.readStringUntil('\n');
-//     line.trim();
-    
-//     // If "start", turn motors on full speed
-//     if (line == "start"){
-//       Serial.println("Starting motors...");
-//       ledcWrite(leftMotorChannel, 255);
-//       ledcWrite(rightMotorChannel, 255);
-//     }
-//     // If "stop", turn motors off immediately
-//     else if (line == "stop"){
-//       Serial.println("Stopping motors...");
-//       ledcWrite(leftMotorChannel, 0);
-//       ledcWrite(rightMotorChannel, 0);
-//     }
-//     if (line == "autonomous"){
-//       Serial.println("Autonomous mode started")
-//     }
-//   }
-// }
