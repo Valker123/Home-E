@@ -16,41 +16,43 @@ void setup() {
 }
 
 void loop() {
-  ObstacleAvoidance();
-
-  if (Serial.available () > 0) {
+  if (Serial.available() > 0) {
     char command = Serial.read();
-
-    if (command == 'U') {
+    
+    if (command == 'M') {
       currentState = STATE_USER_CONTROLLED;
-      stopMotors();
-    }
-    else if (command == 'A'){
+      stopMotors(); 
+    } 
+    else if (command == 'A') {
       currentState = STATE_AUTONOMOUS;
     }
-
-    if (currentState == STATE_USER_CONTROLLED) {
-      switch (command) {
-        case 'W': driveForward(150); break;
-        case 'A': turnLeft(150); break;
-        case 'S': driveBackward(150); break;
-        case 'D': turnRight(150); break;
-        case 'V': stopMotors(); break;
-        default: break;
+    else if (command == 'S') {
+      stopMotors(); // Force instant stop in any mode
+      if (currentState == STATE_AUTONOMOUS) {
+        currentState = STATE_USER_CONTROLLED; // Drop back to manual on stop command
       }
     }
     
+    if (currentState == STATE_USER_CONTROLLED) {
+      switch (command) {
+        case 'W': driveForward(150); break;
+        case 'A': turnLeft(150);     break;
+        case 'S': driveBackward(150); break;
+        case 'D': turnRight(150);    break;
+        case 'V': stopMotors();      break;
+        default:                     break; 
+      }
+    }
   }
 
+  // Only run autonomous navigation if state is active
   if (currentState == STATE_AUTONOMOUS) {
-    
-    bool avoidedWall = ObstacleAvoidance();
-    if (!avoidedWall){
+    bool avoided = ObstacleAvoidance();
+    if (!avoided) {
       driveForward(150);
     }
   }
 }
-
 
 // void loop() {
 //   // Check if Python sent a message
