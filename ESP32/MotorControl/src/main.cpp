@@ -23,7 +23,7 @@ void loop() {
       currentState = STATE_USER_CONTROLLED;
       stopMotors(); 
     } 
-    else if (command == 'A') {
+    else if (command == 'T') {
       currentState = STATE_AUTONOMOUS;
     }
     else if (command == 'S') {
