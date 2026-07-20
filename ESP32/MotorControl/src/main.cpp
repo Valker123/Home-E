@@ -48,13 +48,9 @@ void loop() {
     }
   }
 
-  // --- AUTONOMOUS MODE ---
   if (currentState == STATE_AUTONOMOUS) {
   long distance = readDistanceCm();
   
-  // Send distance text across USB serial to the Pi
-  Serial.print("DISTANCE:");
-  Serial.println(distance);
 
   bool avoided = ObstacleAvoidance();
   if (!avoided) {

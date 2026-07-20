@@ -62,10 +62,10 @@ bool ObstacleAvoidance() {
     // Random turn: 0 = Left, 1 = Right
     if (random(0, 2) == 0) {
       Serial.println("Obstacle! Turning LEFT...");
-      turnLeft(150);
+      turnLeft(200);
     } else {
       Serial.println("Obstacle! Turning RIGHT...");
-      turnRight(150);
+      turnRight(200);
     }
 
     delay(400);
