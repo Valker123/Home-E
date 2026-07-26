@@ -60,7 +60,6 @@ while True:
         esp.write(b'V')
         
     else:
-        print("⚠️ Invalid command. Type a direction (w/a/d/s) or a state mode (manual/auto).")
+        print("Invalid command. Type a direction (w/a/d/s) or a state mode (manual/auto).")
 
-# Clean up and close the port when exiting the loop
 esp.close()
