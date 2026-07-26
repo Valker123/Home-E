@@ -1,0 +1,4 @@
+ - [ ] test pyaudio for microphone
+ - [ ] test the recording for the microphone
+ - [ ] test the STT with a recording of my voice
+ - [ ] test if the ollama model can interpret my voice command

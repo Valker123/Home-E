@@ -1,15 +1,9 @@
-# TODO: Run Ollama using Python
-import requests
+import ollama
 
-response = requests.post(
-    "http://localhost:11434/api/chat",
-    json={
-        "model": "mistral",
-        "messages": [
-            {"role": "user", "content": "hello"}
-        ],
-        "stream": False
-    }
+response = ollama.generate(
+    model='mistral:latest',
+    prompt='Explain Python in one sentence.'
 )
 
-print(response.json()["message"]["content"])
+# Access the response text
+print(response.response)
