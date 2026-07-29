@@ -7,7 +7,9 @@ requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.5.1",
     "ollama>=0.6.2",
+    "piper-tts>=1.6.0",
     "pyaudio>=0.2.14",
+    "pyserial>=3.5",
     "scipy>=1.18.0",
     "vosk>=0.3.45",
 ]

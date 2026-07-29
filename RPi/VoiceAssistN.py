@@ -11,69 +11,93 @@ from vosk import Model, KaldiRecognizer
 import sys
 import numpy as np
 from collections import deque
-import pathlib
 
-CWD = pathlib.Path(__file__).parent.resolve()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_PATH = CWD / "piper" / "en_US-lessac-medium.onnx"
-CONFIG_PATH = CWD / "piper" / "en_US-lessac-medium.onnx.json"
-OUTPUT_WAV = CWD / "test.wav"
-THINKING_SOUND = CWD / "process.wav"
-VOSK_MODEL_PATH = CWD / "vosk-model-small-en-us-0.15"  
-WAKE_WORDS = ["hey homey", "hello homey", "okay homey", "homey"]
-BEEP_SOUND = CWD / "beep.wav"  
+MODEL_PATH = os.path.join(BASE_DIR, "piper", "en_US-lessac-medium.onnx")
+CONFIG_PATH = os.path.join(BASE_DIR, "piper", "en_US-lessac-medium.onnx.json")
+OUTPUT_WAV = os.path.join(BASE_DIR, "test.wav")
+THINKING_SOUND = os.path.join(BASE_DIR, "process.wav")
+VOSK_MODEL_PATH = os.path.join(BASE_DIR, "vosk-model-small-en-us-0.15")
+BEEP_SOUND = os.path.join(BASE_DIR, "beep.wav")
+WAKE_WORDS = ["hey assistant", "hello assistant", "okay assistant", "assistant"]
+
+# --- Mic settings ---
+MIC_DEVICE_INDEX = 1          # USB PnP Sound Device (from your device listing)
+MIC_NATIVE_RATE = 44100       # what the USB mic actually supports
+TARGET_RATE = 16000           # what Vosk needs
+CHUNK_AT_TARGET = 4000        # original chunk size at 16kHz
+CHUNK_AT_NATIVE = int(CHUNK_AT_TARGET * MIC_NATIVE_RATE / TARGET_RATE)
+FRAMES_PER_BUFFER = int(8000 * MIC_NATIVE_RATE / TARGET_RATE)
 
 vosk_model = None
 recognizer = None
 is_listening = False
 wake_word_detected = False
 
+
+def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
+    audio = np.frombuffer(data, dtype=np.int16)
+    if len(audio) == 0:
+        return data
+    duration = len(audio) / orig_rate
+    target_len = max(1, int(duration * target_rate))
+    resampled = np.interp(
+        np.linspace(0, len(audio), target_len, endpoint=False),
+        np.arange(len(audio)),
+        audio
+    ).astype(np.int16)
+    return resampled.tobytes()
+
+
 def create_beep_sound():
     if os.path.exists(BEEP_SOUND):
         return
-   
+
     print("Creating beep sound file...")
     try:
         import math
         import struct
-       
+
         SAMPLE_RATE = 44100
-        DURATION = 0.3  
-        FREQUENCY = 880  
+        DURATION = 0.3
+        FREQUENCY = 880
 
         with wave.open(BEEP_SOUND, 'w') as wav_file:
             wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)  
+            wav_file.setsampwidth(2)
             wav_file.setframerate(SAMPLE_RATE)
 
             for i in range(int(SAMPLE_RATE * DURATION)):
                 fade_factor = 1.0
-                if i < SAMPLE_RATE * 0.1:  
+                if i < SAMPLE_RATE * 0.1:
                     fade_factor = i / (SAMPLE_RATE * 0.1)
-                elif i > SAMPLE_RATE * (DURATION - 0.1):  
+                elif i > SAMPLE_RATE * (DURATION - 0.1):
                     fade_factor = (SAMPLE_RATE * DURATION - i) / (SAMPLE_RATE * 0.1)
-               
+
                 sample = fade_factor * 0.5 * math.sin(2 * math.pi * FREQUENCY * i / SAMPLE_RATE)
                 sample_int = int(sample * 32767)
                 wav_file.writeframes(struct.pack('<h', sample_int))
-       
+
         print(f"Beep sound created at {BEEP_SOUND}")
     except Exception as e:
         print(f"Could not create beep sound: {e}")
 
+
 def initialize_vosk():
     global vosk_model, recognizer
-   
+
     if not os.path.exists(VOSK_MODEL_PATH):
         print(f"Error: Vosk model not found at {VOSK_MODEL_PATH}")
         print("Please download a Vosk model from https://alphacephei.com/vosk/models")
         print("Example: vosk-model-small-en-us-0.15")
         sys.exit(1)
-   
-    vosk_model = Model(str(VOSK_MODEL_PATH))
-    recognizer = KaldiRecognizer(vosk_model, 16000)
+
+    vosk_model = Model(VOSK_MODEL_PATH)
+    recognizer = KaldiRecognizer(vosk_model, TARGET_RATE)
     print("Vosk model loaded successfully")
     print(f"Listening for wake words: {', '.join(WAKE_WORDS)}")
+
 
 def start_thinking_sound():
     proc = subprocess.Popen(
@@ -83,6 +107,7 @@ def start_thinking_sound():
     )
     return proc
 
+
 def stop_thinking_sound(proc):
     if proc and proc.poll() is None:
         proc.terminate()
@@ -90,6 +115,7 @@ def stop_thinking_sound(proc):
             proc.wait(timeout=0.3)
         except:
             proc.kill()
+
 
 def play_beep():
     try:
@@ -117,14 +143,13 @@ def play_beep():
             print("\a", end='', flush=True)
     except Exception as e:
         print(f"Could not play beep: {e}")
-        print("\a", end='', flush=True)  
+        print("\a", end='', flush=True)
+
 
 def speak_with_piper(text):
     thinking_proc = None
-   
-    try:
-        print(f"\n[Home-E Assistant]: {text}\n")
 
+    try:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
             tmp.write(text)
             tmp_path = tmp.name
@@ -133,20 +158,19 @@ def speak_with_piper(text):
 
         piper_process = subprocess.Popen([
             "piper",
-            "-m", str(MODEL_PATH),
-            "-c", str(CONFIG_PATH),
+            "-m", MODEL_PATH,
+            "-c", CONFIG_PATH,
             "-i", tmp_path,
             "-f", OUTPUT_WAV
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         while piper_process.poll() is None:
-            if thinking_proc and thinking_proc.poll() is not None:
-                stop_thinking_sound(thinking_proc)
+            if thinking_proc.poll() is not None:
                 thinking_proc = start_thinking_sound()
             time.sleep(0.1)
 
         piper_process.wait()
-       
+
     finally:
         try:
             os.unlink(tmp_path)
@@ -160,6 +184,7 @@ def speak_with_piper(text):
 
     subprocess.run(["aplay", OUTPUT_WAV])
 
+
 def check_wake_word(text):
     text_lower = text.lower().strip()
     for wake_word in WAKE_WORDS:
@@ -167,34 +192,36 @@ def check_wake_word(text):
             return True
     return False
 
+
 def listen_for_command(timeout_seconds=10):
     global is_listening
-   
+
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16,
                     channels=1,
-                    rate=16000,
+                    rate=MIC_NATIVE_RATE,
                     input=True,
-                    input_device_index=3,
-                    frames_per_buffer=4410)
+                    input_device_index=MIC_DEVICE_INDEX,
+                    frames_per_buffer=FRAMES_PER_BUFFER)
     stream.start_stream()
-   
+
     print("\nListening for command...")
-   
+
     start_time = time.time()
     silence_start = None
     speech_detected = False
     final_text = ""
 
     recognizer.Reset()
-   
+
     while is_listening:
         if time.time() - start_time > timeout_seconds:
             print("Timeout - no command detected")
             break
-       
-        data = stream.read(4000, exception_on_overflow=False)
-       
+
+        raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
+        data = resample_audio(raw_data)
+
         if recognizer.AcceptWaveform(data):
             result = json.loads(recognizer.Result())
             if result.get("text", "").strip():
@@ -218,80 +245,78 @@ def listen_for_command(timeout_seconds=10):
                 if final_text:
                     print(f"Command: {final_text}")
                 break
-   
+
     stream.stop_stream()
     stream.close()
     p.terminate()
-   
+
     return final_text.strip()
+
 
 def continuous_listen_for_wake_word():
     global is_listening, wake_word_detected
-   
+
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16,
                     channels=1,
-                    rate=44100,
+                    rate=MIC_NATIVE_RATE,
                     input=True,
-                    input_device_index=3,
-                    frames_per_buffer=4410)
+                    input_device_index=MIC_DEVICE_INDEX,
+                    frames_per_buffer=FRAMES_PER_BUFFER)
     stream.start_stream()
-   
+
     print("\nAlways listening for wake word...")
     print(f"Say one of: {', '.join(WAKE_WORDS)}")
-   
+
     recognizer.Reset()
-   
+
     while is_listening:
         try:
-            data = stream.read(4000, exception_on_overflow=False)
-           
+            raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
+            data = resample_audio(raw_data)
+
             if recognizer.AcceptWaveform(data):
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "").strip()
 
-                if text:
-                    print(f"[Vosk Heard] '{text}'")
-               
-
-               
                 if text and check_wake_word(text):
                     print(f"\nWake word detected: '{text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()  
+                    recognizer.Reset()
                     break
 
             partial_result = json.loads(recognizer.PartialResult())
             partial_text = partial_result.get("partial", "").lower()
-           
+
             if partial_text and any(wake_word in partial_text for wake_word in WAKE_WORDS):
                 time.sleep(0.1)
                 result = json.loads(recognizer.FinalResult())
                 final_text = result.get("text", "").strip()
-               
+
                 if final_text and check_wake_word(final_text):
                     print(f"\nWake word detected: '{final_text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()  
+                    recognizer.Reset()
                     break
-           
+
         except Exception as e:
             print(f"Audio error: {e}")
             time.sleep(0.1)
-   
+
     stream.stop_stream()
     stream.close()
     p.terminate()
 
+
 def process_with_llm(user_input):
     thinking_proc = start_thinking_sound()
-   
+
     response_text = ""
     try:
         stream = ollama.chat(
-            model="qwen2.5:0.5b",
+            model="qwen2.5:1.5b",
             messages=[{
                 "role": "user",
                 "content": user_input + ". Respond in under 50 words."
@@ -305,19 +330,20 @@ def process_with_llm(user_input):
                 content = chunk["message"]["content"]
                 response_text += content
         print("Done!")
-       
+
     except Exception as e:
         print(f"Error with LLM: {e}")
         response_text = "I encountered an error processing your request."
-   
+
     finally:
         stop_thinking_sound(thinking_proc)
-   
+
     return response_text.strip()
+
 
 def main():
     global is_listening, wake_word_detected
-   
+
     print("=" * 50)
     print("Voice Assistant with Wake Word")
     print("=" * 50)
@@ -331,22 +357,22 @@ def main():
 
     create_beep_sound()
     initialize_vosk()
-   
+
     is_listening = True
-   
+
     try:
         while is_listening:
             wake_word_detected = False
             continuous_listen_for_wake_word()
-           
+
             if not is_listening:
                 break
-           
+
             if wake_word_detected:
                 time.sleep(0.3)
-               
+
                 command = listen_for_command(timeout_seconds=10)
-               
+
                 if not command:
                     print("No command detected. Going back to sleep.\n")
                     continue
@@ -355,22 +381,22 @@ def main():
                     print("\nGoodbye!")
                     is_listening = False
                     break
-               
+
                 print(f"\nProcessing: {command}")
 
                 response = process_with_llm(command)
-               
+
                 if response:
                     print(f"\nResponse: {response}")
 
                     time.sleep(0.1)
                     speak_with_piper(response)
-               
+
                 print("\n" + "-" * 50)
                 print("Back to listening for wake word...\n")
-               
-            time.sleep(0.1)  
-           
+
+            time.sleep(0.1)
+
     except KeyboardInterrupt:
         print("\nInterrupted by user. Goodbye!")
     except Exception as e:
@@ -378,14 +404,15 @@ def main():
     finally:
         is_listening = False
 
+
 if __name__ == "__main__":
     def signal_handler(sig, frame):
         print("\nShutting down...")
         sys.exit(0)
-   
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-   
+
     try:
         main()
     except KeyboardInterrupt:
