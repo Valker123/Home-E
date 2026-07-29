@@ -8,6 +8,7 @@ import json
 import wave
 import pyaudio
 import serial
+import requests
 from vosk import Model, KaldiRecognizer
 import sys
 import numpy as np
@@ -21,7 +22,7 @@ OUTPUT_WAV = os.path.join(BASE_DIR, "test.wav")
 THINKING_SOUND = os.path.join(BASE_DIR, "process.wav")
 VOSK_MODEL_PATH = os.path.join(BASE_DIR, "vosk-model-small-en-us-0.15")
 BEEP_SOUND = os.path.join(BASE_DIR, "beep.wav")
-WAKE_WORDS = ["hey homey", "hello homey", "okay homey", "homey"]
+WAKE_WORDS = ["hey assistant", "hello assistant", "okay assistant", "assistant"]
 
 # --- Mic settings ---
 MIC_DEVICE_INDEX = 1          # USB PnP Sound Device
@@ -50,10 +51,8 @@ TOOLS = [
         "function": {
             "name": "move_robot",
             "description": (
-                "Move the robot in a direction, or stop it. Use for phrases like "
-                "'go forward', 'move ahead', 'back up', 'reverse', 'turn left', "
-                "'spin right', 'halt', 'stop moving'. Do NOT use this for questions "
-                "about the robot — only for direct movement commands."
+                "Move the robot in a direction, or stop it. Use this whenever "
+                "the user asks the robot to move, drive, turn, go, or stop."
             ),
             "parameters": {
                 "type": "object",
@@ -77,10 +76,8 @@ TOOLS = [
         "function": {
             "name": "set_mode",
             "description": (
-                "Switch control mode. Use for phrases like 'go autonomous', "
-                "'self-driving mode', 'take over manually', 'let me control it', "
-                "'switch to auto/manual'. Do NOT use this for movement commands "
-                "like 'go forward' — those belong to move_robot."
+                "Switch the robot between manual (user-controlled) mode and "
+                "autonomous (self-driving, obstacle-avoiding) mode."
             ),
             "parameters": {
                 "type": "object",
@@ -92,6 +89,43 @@ TOOLS = [
                     }
                 },
                 "required": ["mode"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_outdoor_weather",
+            "description": (
+                "Get the CURRENT OUTDOOR temperature and weather conditions "
+                "outside, based on your current location. Use this for phrases "
+                "like 'what's the temperature outside', 'what's the weather "
+                "like', 'is it cold out', 'how hot is it outside'. "
+                "Do NOT use this for questions about the room/indoor "
+                "temperature — use get_room_temperature for that instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_room_temperature",
+            "description": (
+                "Get the CURRENT INDOOR/ROOM temperature from the local "
+                "temperature sensor attached to the robot. Use this for "
+                "phrases like 'what's the temperature in here', 'how warm "
+                "is this room', 'what's the temperature right now' (when "
+                "clearly referring to the immediate surroundings, not "
+                "outside weather). Do NOT use this for outdoor weather "
+                "questions — use get_outdoor_weather for that instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     }
@@ -144,6 +178,87 @@ def execute_set_mode(mode):
     elif mode == "auto":
         esp_serial.write(b'T')
         print("Sent mode: Auto (T)")
+
+
+def get_current_location():
+    """Uses the Pi's public IP to estimate current location (city-level accuracy)."""
+    try:
+        resp = requests.get("http://ip-api.com/json/", timeout=5)
+        data = resp.json()
+        if data.get("status") == "success":
+            return {
+                "lat": data["lat"],
+                "lon": data["lon"],
+                "city": data.get("city", "unknown"),
+                "region": data.get("regionName", ""),
+            }
+    except Exception as e:
+        print(f"Location lookup failed: {e}")
+    return None
+
+
+def get_outdoor_weather():
+    location = get_current_location()
+    if not location:
+        return "I couldn't determine your current location to check the weather."
+
+    try:
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": location["lat"],
+                "longitude": location["lon"],
+                "current": "temperature_2m,weather_code",
+                "temperature_unit": "fahrenheit",
+            },
+            timeout=5,
+        )
+        data = resp.json()
+        current = data.get("current", {})
+        temp_f = current.get("temperature_2m")
+
+        if temp_f is None:
+            return "I couldn't get the current weather data."
+
+        place = location["city"] or "your current location"
+        return f"It's currently {temp_f:.0f}°F outside in {place}."
+
+    except Exception as e:
+        print(f"Weather lookup failed: {e}")
+        return "I couldn't reach the weather service right now."
+
+
+def get_room_temperature():
+    if esp_serial is None:
+        return "I can't reach the ESP32 to check the room temperature right now."
+
+    try:
+        # Clear out any stale/leftover bytes sitting in the input buffer
+        esp_serial.reset_input_buffer()
+
+        esp_serial.write(b'R')
+
+        # Give the ESP32 a moment to take the reading and respond
+        line = esp_serial.readline().decode('utf-8', errors='ignore').strip()
+
+        if not line:
+            return "I didn't get a response from the temperature sensor."
+
+        if line == "TEMP:ERROR":
+            return "The temperature sensor gave a bad reading. Try again in a moment."
+
+        # Expected format: "TEMP:72.14,HUM:45.30"
+        if line.startswith("TEMP:") and ",HUM:" in line:
+            temp_part, hum_part = line.split(",HUM:")
+            temp_f = float(temp_part.replace("TEMP:", ""))
+            hum = float(hum_part)
+            return f"The room is currently {temp_f:.0f}°F with {hum:.0f}% humidity."
+
+        return f"Got an unexpected reading from the sensor: {line}"
+
+    except Exception as e:
+        print(f"Room temperature read failed: {e}")
+        return "I had trouble reading the room temperature sensor."
 
 
 def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
@@ -456,6 +571,10 @@ def process_with_llm(user_input):
                     mode = args.get("mode", "manual")
                     execute_set_mode(mode)
                     response_text = f"Switched to {mode} mode."
+                elif fn_name == "get_outdoor_weather":
+                    response_text = get_outdoor_weather()
+                elif fn_name == "get_room_temperature":
+                    response_text = get_room_temperature()
                 else:
                     response_text = "I tried to do something but wasn't sure what."
         else:

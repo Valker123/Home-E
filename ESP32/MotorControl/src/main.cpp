@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include "motors.h"
 #include "ultrasonic.h"
+#include "dht_sensor.h"
+
 
 enum RobotState {
   STATE_USER_CONTROLLED,
@@ -12,6 +14,7 @@ RobotState currentState = STATE_USER_CONTROLLED;
 void setup() {
   setupMotors();
   setupUltrasonic();
+  setupDHT();
   Serial.begin(115200);
 }
 
@@ -33,6 +36,19 @@ void loop() {
     else if (command == 'V') { // 'V' is Stop & Reset to Manual
       stopMotors();
       currentState = STATE_USER_CONTROLLED;
+      return;
+    }
+    else if (command == 'R') { 
+      float tempF = readTemperatureF();
+      float hum = readHumidity();
+      if (isnan(tempF) || isnan(hum)) {
+        Serial.println("TEMP:ERROR");
+      } else {
+        Serial.print("TEMP:");
+        Serial.print(tempF);
+        Serial.print(",HUM:");
+        Serial.println(hum);
+      }
       return;
     }
 
