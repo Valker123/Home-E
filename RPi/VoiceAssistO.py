@@ -13,6 +13,7 @@ from vosk import Model, KaldiRecognizer
 import sys
 import numpy as np
 from collections import deque
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -128,7 +129,36 @@ TOOLS = [
                 "properties": {}
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_date",
+            "description": (
+                "Get the current date. Use this for phrases like 'what date "
+                "is it', 'what's today's date', or 'what day is it'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": (
+                "Get the current time. Use this for phrases like 'what time "
+                "is it', 'what's the time', 'do you know the time'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
+                
 ]
 
 vosk_model = None
@@ -227,7 +257,6 @@ def get_outdoor_weather():
         print(f"Weather lookup failed: {e}")
         return "I couldn't reach the weather service right now."
 
-
 def get_room_temperature():
     if esp_serial is None:
         return "I can't reach the ESP32 to check the room temperature right now."
@@ -260,7 +289,6 @@ def get_room_temperature():
         print(f"Room temperature read failed: {e}")
         return "I had trouble reading the room temperature sensor."
 
-
 def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
     audio = np.frombuffer(data, dtype=np.int16)
     if len(audio) == 0:
@@ -274,6 +302,13 @@ def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
     ).astype(np.int16)
     return resampled.tobytes()
 
+def get_current_time():
+    now = datetime.now()
+    return now.strftime("It's currently %-I:%M %p.")
+
+def get_current_date():
+    now = datetime.now()
+    return now.strftime("Today is %A, %B %-d, %Y.")
 
 def create_beep_sound():
     if os.path.exists(BEEP_SOUND):
@@ -575,6 +610,10 @@ def process_with_llm(user_input):
                     response_text = get_outdoor_weather()
                 elif fn_name == "get_room_temperature":
                     response_text = get_room_temperature()
+                elif fn_name == "get_current_time":
+                                        response_text = get_current_time()
+                elif fn_name == "get_current_date":
+                                        response_text = get_current_date()
                 else:
                     response_text = "I tried to do something but wasn't sure what."
         else:
