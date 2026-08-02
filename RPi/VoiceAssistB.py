@@ -9,11 +9,12 @@ import wave
 import pyaudio
 import serial
 import requests
+import threading
+from datetime import datetime
 from vosk import Model, KaldiRecognizer
 import sys
 import numpy as np
 from collections import deque
-from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -101,10 +102,9 @@ TOOLS = [
                 "Get the CURRENT OUTDOOR temperature and weather conditions "
                 "outside, based on your current location. Use this for phrases "
                 "like 'what's the temperature outside', 'what's the weather "
-                "like', 'is it cold out', 'how hot is it outside'. If the user "
-                "asks about both indoor and outdoor temperature in the same "
-                "request, call this tool AND get_room_temperature separately — "
-                "do not just describe what you would do, actually call both."
+                "like', 'is it cold out', 'how hot is it outside'. "
+                "Do NOT use this for questions about the room/indoor "
+                "temperature — use get_room_temperature for that instead."
             ),
             "parameters": {
                 "type": "object",
@@ -134,20 +134,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_current_date",
-            "description": (
-                "Get the current date. Use this for phrases like 'what date "
-                "is it', 'what's today's date', or 'what day is it'."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_current_time",
             "description": (
                 "Get the current time. Use this for phrases like 'what time "
@@ -158,8 +144,60 @@ TOOLS = [
                 "properties": {}
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_date",
+            "description": (
+                "Get today's date, including day of the week. Use this for "
+                "phrases like 'what's the date', 'what day is it', "
+                "'what's today's date'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_timer",
+            "description": (
+                "Set a timer/alarm for a certain amount of time from now. "
+                "Convert any spoken duration into total seconds — e.g. "
+                "'5 minutes' becomes 300, '1 minute 30 seconds' becomes 90, "
+                "'2 hours' becomes 7200. Use this for phrases like 'set a "
+                "timer for X', 'set an alarm for X', 'remind me in X'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seconds": {
+                        "type": "number",
+                        "description": "Total duration of the timer, in seconds."
+                    }
+                },
+                "required": ["seconds"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_timer",
+            "description": (
+                "Cancel the currently running timer/alarm, or stop an alarm "
+                "that is currently ringing. Use for phrases like 'cancel the "
+                "timer', 'stop the alarm', 'turn off the alarm'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
-                
 ]
 
 vosk_model = None
@@ -167,6 +205,9 @@ recognizer = None
 is_listening = False
 wake_word_detected = False
 esp_serial = None
+
+active_timer = None
+alarm_ringing = False
 
 
 def init_esp_connection():
@@ -252,11 +293,12 @@ def get_outdoor_weather():
             return "I couldn't get the current weather data."
 
         place = location["city"] or "your current location"
-        return f"It's currently {temp_f:.0f} degrees fahrenheit outside in {place}."
+        return f"It's currently {temp_f:.0f}°F outside in {place}."
 
     except Exception as e:
         print(f"Weather lookup failed: {e}")
         return "I couldn't reach the weather service right now."
+
 
 def get_room_temperature():
     if esp_serial is None:
@@ -290,6 +332,88 @@ def get_room_temperature():
         print(f"Room temperature read failed: {e}")
         return "I had trouble reading the room temperature sensor."
 
+
+def get_current_time():
+    now = datetime.now()
+    return now.strftime("It's currently %-I:%M %p.")
+
+
+def get_current_date():
+    now = datetime.now()
+    return now.strftime("Today is %A, %B %-d, %Y.")
+
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if secs and not hours:  # skip seconds if it's a long timer, keep it natural
+        parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+    return " and ".join(parts) if parts else "0 seconds"
+
+
+def _alarm_fire():
+    global alarm_ringing
+    alarm_ringing = True
+    print("\n*** TIMER FINISHED ***")
+
+
+def execute_set_timer(seconds):
+    global active_timer, alarm_ringing
+
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return "I didn't understand how long to set the timer for."
+
+    if seconds <= 0:
+        return "That's not a valid amount of time for a timer."
+
+    if active_timer:
+        active_timer.cancel()
+
+    alarm_ringing = False
+    active_timer = threading.Timer(seconds, _alarm_fire)
+    active_timer.daemon = True
+    active_timer.start()
+
+    return f"Timer set for {format_duration(seconds)}."
+
+
+def execute_cancel_timer():
+    global active_timer, alarm_ringing
+
+    if alarm_ringing:
+        alarm_ringing = False
+        return "Alarm stopped."
+
+    if active_timer:
+        active_timer.cancel()
+        active_timer = None
+        return "Timer canceled."
+
+    return "There's no timer running."
+
+
+def handle_alarm_ringing():
+    """Called from the main loop when a timer has fired. Plays an alarm
+    sound and announces it, then clears the flag."""
+    global alarm_ringing
+
+    print("Alarm ringing!")
+    for _ in range(3):
+        play_beep()
+        time.sleep(0.2)
+
+    speak_with_piper("Time's up! Your timer has finished.")
+    alarm_ringing = False
+
+
 def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
     audio = np.frombuffer(data, dtype=np.int16)
     if len(audio) == 0:
@@ -303,13 +427,6 @@ def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
     ).astype(np.int16)
     return resampled.tobytes()
 
-def get_current_time():
-    now = datetime.now()
-    return now.strftime("It's currently %-I:%M %p.")
-
-def get_current_date():
-    now = datetime.now()
-    return now.strftime("Today is %A, %B %-d, %Y.")
 
 def create_beep_sound():
     if os.path.exists(BEEP_SOUND):
@@ -362,7 +479,7 @@ def initialize_vosk():
 
 def start_thinking_sound():
     proc = subprocess.Popen(
-        ["aplay", "-q", THINKING_SOUND],
+        ["paplay", THINKING_SOUND],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -382,7 +499,7 @@ def play_beep():
     try:
         if os.path.exists(BEEP_SOUND):
             subprocess.run(
-                ["aplay", "-q", BEEP_SOUND],
+                ["paplay", BEEP_SOUND],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
@@ -443,7 +560,7 @@ def speak_with_piper(text):
 
     time.sleep(0.2)
 
-    subprocess.run(["aplay", OUTPUT_WAV])
+    subprocess.run(["paplay", OUTPUT_WAV])
 
 
 def check_wake_word(text):
@@ -532,6 +649,10 @@ def continuous_listen_for_wake_word():
     recognizer.Reset()
 
     while is_listening:
+        if alarm_ringing:
+            print("\nAlarm detected while listening for wake word - breaking to handle it")
+            break
+
         try:
             raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
             data = resample_audio(raw_data)
@@ -612,9 +733,14 @@ def process_with_llm(user_input):
                 elif fn_name == "get_room_temperature":
                     response_text = get_room_temperature()
                 elif fn_name == "get_current_time":
-                                        response_text = get_current_time()
+                    response_text = get_current_time()
                 elif fn_name == "get_current_date":
-                                        response_text = get_current_date()
+                    response_text = get_current_date()
+                elif fn_name == "set_timer":
+                    seconds = args.get("seconds", 0)
+                    response_text = execute_set_timer(seconds)
+                elif fn_name == "cancel_timer":
+                    response_text = execute_cancel_timer()
                 else:
                     response_text = "I tried to do something but wasn't sure what."
         else:
@@ -661,6 +787,10 @@ def main():
 
             if not is_listening:
                 break
+
+            if alarm_ringing:
+                handle_alarm_ringing()
+                continue
 
             if wake_word_detected:
                 time.sleep(0.3)
