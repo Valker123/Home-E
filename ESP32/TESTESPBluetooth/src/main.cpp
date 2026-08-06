@@ -1,77 +1,77 @@
 #include <WiFi.h>
+#include <PubSubClient.h>
 
 const char* ssid = "TP-Link_25CF";
 const char* password = "Happylife!505";
 
-WiFiServer server(80);
+const char* mqtt_broker = "192.168.1.XXX";  // <-- your Pi's IP address
+const int mqtt_port = 1883;
+
+const char* topic_set = "home/light/set";     // Pi -> ESP32 (commands)
+const char* topic_state = "home/light/state"; // ESP32 -> Pi (status updates)
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void setLight(bool on) {
+  digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
+  client.publish(topic_state, on ? "on" : "off");
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  Serial.print("Received on ");
+  Serial.print(topic);
+  Serial.print(": ");
+  Serial.println(message);
+
+  if (message == "on") {
+    setLight(true);
+  } else if (message == "off") {
+    setLight(false);
+  }
+}
+
+void reconnectMQTT() {
+  while (!client.connected()) {
+    Serial.println("Connecting to MQTT broker...");
+    if (client.connect("ESP32LightClient")) {
+      Serial.println("MQTT connected");
+      client.subscribe(topic_set);
+    } else {
+      Serial.print("Failed, rc=");
+      Serial.print(client.state());
+      delay(2000);
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH); // Off initially
+  digitalWrite(LED_BUILTIN, LOW);
 
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
   WiFi.begin(ssid, password);
-  
+  Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.print("IP address: ");
+  Serial.println();
+  Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
-  
-  server.begin();
+
+  client.setServer(mqtt_broker, mqtt_port);
+  client.setCallback(callback);
 }
 
 void loop() {
-  WiFiClient client = server.available();   
-
-  if (client) {
-    String currentLine = "";
-    String requestString = "";
-    
-    while (client.connected()) {
-      if (client.available()) {
-        char c = client.read();
-        requestString += c; // Capture the full request
-        
-        if (c == '\n') {
-          if (currentLine.length() == 0) {
-            // Check what the user requested before sending the HTML response
-            if (requestString.indexOf("GET /on") >= 0) {
-              Serial.println("Command: Turn ON");
-              digitalWrite(LED_BUILTIN, HIGH); // Change to HIGH if your LED logic is reversed
-            } else if (requestString.indexOf("GET /off") >= 0) {
-              Serial.println("Command: Turn OFF");
-              digitalWrite(LED_BUILTIN, LOW); // Change to LOW if your LED logic is reversed
-            }
-
-            // Send HTTP response
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
-            client.println("Connection: close");
-            client.println();
-            
-            client.println("<!DOCTYPE html><html>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>");
-            client.println("<body><h1>ESP Light Control Test</h1>");
-            client.println("<p><a href=\"/on\"><button>ON</button></a></p>");
-            client.println("<p><a href=\"/off\"><button>OFF</button></a></p>");
-            client.println("</body></html>");
-            break;
-          } else {
-            currentLine = "";
-          }
-        } else if (c != '\r') {
-          currentLine += c;
-        }
-      }
-    }
-    client.stop();
+  if (!client.connected()) {
+    reconnectMQTT();
   }
+  client.loop();
 }

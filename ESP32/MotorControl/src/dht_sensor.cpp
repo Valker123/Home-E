@@ -20,3 +20,4 @@ float readHumidity() {
     float hum = dht.readHumidity();
     return hum;  // returns NAN if read failed
 }
+

@@ -368,6 +368,7 @@ def start_thinking_sound():
     )
     return proc
 
+# blocking/non-blocking code search this up :)
 
 def stop_thinking_sound(proc):
     if proc and proc.poll() is None:
