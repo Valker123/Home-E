@@ -1,0 +1,978 @@
+import ollama
+import subprocess
+import tempfile
+import os
+import time
+import signal
+import json
+import wave
+import pyaudio
+import serial
+import requests
+import threading
+import paho.mqtt.client as mqtt
+import csv
+from datetime import datetime
+from vosk import Model, KaldiRecognizer
+import sys
+import numpy as np
+from collections import deque
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+LATENCY_LOG_PATH = os.path.join(BASE_DIR, "latency_log.csv")
+CURRENT_CONDITION = "cold"  # flips to "warm" after the first LLM call in a run
+LAST_TOOL_CALLED = ""       # updated inside process_with_llm() each turn
+
+MODEL_PATH = os.path.join(BASE_DIR, "piper", "en_US-lessac-medium.onnx")
+CONFIG_PATH = os.path.join(BASE_DIR, "piper", "en_US-lessac-medium.onnx.json")
+OUTPUT_WAV = os.path.join(BASE_DIR, "test.wav")
+THINKING_SOUND = os.path.join(BASE_DIR, "process.wav")
+VOSK_MODEL_PATH = os.path.join(BASE_DIR, "vosk-model-small-en-us-0.15")
+BEEP_SOUND = os.path.join(BASE_DIR, "beep.wav")
+WAKE_WORDS = ["hey assistant", "hello assistant", "okay assistant", "assistant"]
+
+# --- Mic settings ---
+MIC_DEVICE_INDEX = 1          # USB PnP Sound Device
+MIC_NATIVE_RATE = 44100       # what the USB mic actually supports
+TARGET_RATE = 16000           # what Vosk needs
+CHUNK_AT_TARGET = 4000
+CHUNK_AT_NATIVE = int(CHUNK_AT_TARGET * MIC_NATIVE_RATE / TARGET_RATE)
+FRAMES_PER_BUFFER = int(8000 * MIC_NATIVE_RATE / TARGET_RATE)
+
+# --- ESP32 serial settings ---
+ESP_PORT = "/dev/ttyUSB0"
+ESP_BAUD = 115200
+
+# --- MQTT settings (Pi runs the broker itself, via Mosquitto) ---
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
+MQTT_LIGHT_SET_TOPIC = "home/light/set"
+MQTT_LIGHT_STATE_TOPIC = "home/light/state"
+
+DIRECTION_TO_COMMAND = {
+    "forward": b'W',
+    "left": b'A',
+    "backward": b'S',
+    "right": b'D',
+    "stop": b'V',
+}
+
+# --- Tool definitions for Ollama function calling ---
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "move_robot",
+            "description": (
+                "Move the robot in a direction, or stop it. Use this whenever "
+                "the user asks the robot to move, drive, turn, go, or stop."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["forward", "backward", "left", "right", "stop"],
+                        "description": "Direction to move the robot"
+                    },
+                    "duration": {
+                        "type": "number",
+                        "description": "How long to move, in seconds. Default 1 second if not specified."
+                    }
+                },
+                "required": ["direction"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_mode",
+            "description": (
+                "Switch the robot between manual (user-controlled) mode and "
+                "autonomous (self-driving, obstacle-avoiding) mode."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["manual", "auto"],
+                        "description": "manual = user controlled, auto = autonomous obstacle avoidance"
+                    }
+                },
+                "required": ["mode"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_outdoor_weather",
+            "description": (
+                "Get the CURRENT OUTDOOR temperature and weather conditions "
+                "outside, based on your current location. Use this for phrases "
+                "like 'what's the temperature outside', 'what's the weather "
+                "like', 'is it cold out', 'how hot is it outside'. "
+                "Do NOT use this for questions about the room/indoor "
+                "temperature — use get_room_temperature for that instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_room_temperature",
+            "description": (
+                "Get the CURRENT INDOOR/ROOM temperature from the local "
+                "temperature sensor attached to the robot. Use this for "
+                "phrases like 'what's the temperature in here', 'how warm "
+                "is this room', 'what's the temperature right now' (when "
+                "clearly referring to the immediate surroundings, not "
+                "outside weather). Do NOT use this for outdoor weather "
+                "questions — use get_outdoor_weather for that instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": (
+                "Get the current time. Use this for phrases like 'what time "
+                "is it', 'what's the time', 'do you know the time'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_date",
+            "description": (
+                "Get today's date, including day of the week. Use this for "
+                "phrases like 'what's the date', 'what day is it', "
+                "'what's today's date'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_timer",
+            "description": (
+                "Set a timer/alarm for a certain amount of time from now. "
+                "Convert any spoken duration into total seconds — e.g. "
+                "'5 minutes' becomes 300, '1 minute 30 seconds' becomes 90, "
+                "'2 hours' becomes 7200. Use this for phrases like 'set a "
+                "timer for X', 'set an alarm for X', 'remind me in X'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seconds": {
+                        "type": "number",
+                        "description": "Total duration of the timer, in seconds."
+                    }
+                },
+                "required": ["seconds"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_timer",
+            "description": (
+                "Cancel the currently running timer/alarm, or stop an alarm "
+                "that is currently ringing. Use for phrases like 'cancel the "
+                "timer', 'stop the alarm', 'turn off the alarm'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "control_light",
+            "description": (
+                "Turn the room light on or off. Use this for phrases like "
+                "'turn on the light', 'turn off the light', 'lights on', "
+                "'lights off'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": ["on", "off"],
+                        "description": "Whether to turn the light on or off"
+                    }
+                },
+                "required": ["state"]
+            }
+        }
+    }
+]
+
+vosk_model = None
+recognizer = None
+is_listening = False
+wake_word_detected = False
+esp_serial = None
+
+mqtt_client = None
+
+active_timer = None
+alarm_ringing = False
+
+
+def on_mqtt_message(client, userdata, msg):
+    # Logs status updates the light ESP32 publishes back (e.g. after a manual
+    # physical toggle, if you ever wire that up) — not required for basic
+    # on/off control, but useful for debugging and future expansion.
+    print(f"MQTT message on {msg.topic}: {msg.payload.decode()}")
+
+
+def init_mqtt():
+    global mqtt_client
+    try:
+        mqtt_client = mqtt.Client()
+        mqtt_client.on_message = on_mqtt_message
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        mqtt_client.subscribe(MQTT_LIGHT_STATE_TOPIC)
+        mqtt_client.loop_start()  # background thread handles the connection
+        print(f"MQTT connected to broker at {MQTT_BROKER}:{MQTT_PORT}")
+    except Exception as e:
+        print(f"Could not connect to MQTT broker ({e}). Light control will be skipped.")
+        mqtt_client = None
+
+
+def execute_light(state):
+    if mqtt_client is None:
+        print(f"[No MQTT connection] Would set light: {state}")
+        return
+    mqtt_client.publish(MQTT_LIGHT_SET_TOPIC, state)
+    print(f"Published to {MQTT_LIGHT_SET_TOPIC}: {state}")
+
+
+def init_latency_log():
+    """Creates latency_log.csv with a header row if it doesn't already exist.
+    Call once at startup, alongside the other init_ functions."""
+    if not os.path.exists(LATENCY_LOG_PATH):
+        with open(LATENCY_LOG_PATH, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp",
+                "command_text",
+                "condition",
+                "stt_seconds",
+                "llm_seconds",
+                "tts_seconds",
+                "total_seconds",
+                "tool_called",
+            ])
+    print(f"Latency log ready at {LATENCY_LOG_PATH}")
+
+
+def log_latency(command_text, condition, stt_s, llm_s, tts_s, total_s, tool_called):
+    with open(LATENCY_LOG_PATH, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            command_text,
+            condition,
+            f"{stt_s:.3f}",
+            f"{llm_s:.3f}",
+            f"{tts_s:.3f}",
+            f"{total_s:.3f}",
+            tool_called,
+        ])
+
+
+def init_esp_connection():
+    global esp_serial
+    try:
+        esp_serial = serial.Serial(ESP_PORT, ESP_BAUD, timeout=1)
+        time.sleep(2)  # give ESP32 time to reset/initialize
+        print(f"ESP32 connected on {ESP_PORT}")
+    except Exception as e:
+        print(f"Could not connect to ESP32 ({e}). Motor commands will be skipped.")
+        esp_serial = None
+
+
+def execute_move(direction, duration=1.0):
+    if esp_serial is None:
+        print(f"[No ESP connected] Would move: {direction} for {duration}s")
+        return
+    cmd = DIRECTION_TO_COMMAND.get(direction)
+    if not cmd:
+        print(f"Unknown direction: {direction}")
+        return
+    esp_serial.write(cmd)
+    print(f"Sent to ESP32: {cmd}")
+    if direction != "stop":
+        try:
+            time.sleep(min(float(duration), 10.0))  # cap to 10s for safety
+        except (TypeError, ValueError):
+            time.sleep(1.0)
+        esp_serial.write(b'V')
+        print("Sent stop (V) after duration")
+
+
+def execute_set_mode(mode):
+    if esp_serial is None:
+        print(f"[No ESP connected] Would set mode: {mode}")
+        return
+    if mode == "manual":
+        esp_serial.write(b'M')
+        print("Sent mode: Manual (M)")
+    elif mode == "auto":
+        esp_serial.write(b'T')
+        print("Sent mode: Auto (T)")
+
+
+def get_current_location():
+    """Uses the Pi's public IP to estimate current location (city-level accuracy)."""
+    try:
+        resp = requests.get("http://ip-api.com/json/", timeout=5)
+        data = resp.json()
+        if data.get("status") == "success":
+            return {
+                "lat": data["lat"],
+                "lon": data["lon"],
+                "city": data.get("city", "unknown"),
+                "region": data.get("regionName", ""),
+            }
+    except Exception as e:
+        print(f"Location lookup failed: {e}")
+    return None
+
+
+def get_outdoor_weather():
+    location = get_current_location()
+    if not location:
+        return "I couldn't determine your current location to check the weather."
+
+    try:
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": location["lat"],
+                "longitude": location["lon"],
+                "current": "temperature_2m,weather_code",
+                "temperature_unit": "fahrenheit",
+            },
+            timeout=5,
+        )
+        data = resp.json()
+        current = data.get("current", {})
+        temp_f = current.get("temperature_2m")
+
+        if temp_f is None:
+            return "I couldn't get the current weather data."
+
+        place = location["city"] or "your current location"
+        return f"It's currently {temp_f:.0f}°F outside in {place}."
+
+    except Exception as e:
+        print(f"Weather lookup failed: {e}")
+        return "I couldn't reach the weather service right now."
+
+
+def get_room_temperature():
+    if esp_serial is None:
+        return "I can't reach the ESP32 to check the room temperature right now."
+
+    try:
+        # Clear out any stale/leftover bytes sitting in the input buffer
+        esp_serial.reset_input_buffer()
+
+        esp_serial.write(b'R')
+
+        # Give the ESP32 a moment to take the reading and respond
+        line = esp_serial.readline().decode('utf-8', errors='ignore').strip()
+
+        if not line:
+            return "I didn't get a response from the temperature sensor."
+
+        if line == "TEMP:ERROR":
+            return "The temperature sensor gave a bad reading. Try again in a moment."
+
+        # Expected format: "TEMP:72.14,HUM:45.30"
+        if line.startswith("TEMP:") and ",HUM:" in line:
+            temp_part, hum_part = line.split(",HUM:")
+            temp_f = float(temp_part.replace("TEMP:", ""))
+            hum = float(hum_part)
+            return f"The room is currently {temp_f:.0f}°F with {hum:.0f}% humidity."
+
+        return f"Got an unexpected reading from the sensor: {line}"
+
+    except Exception as e:
+        print(f"Room temperature read failed: {e}")
+        return "I had trouble reading the room temperature sensor."
+
+
+def get_current_time():
+    now = datetime.now()
+    return now.strftime("It's currently %-I:%M %p.")
+
+
+def get_current_date():
+    now = datetime.now()
+    return now.strftime("Today is %A, %B %-d, %Y.")
+
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if secs and not hours:  # skip seconds if it's a long timer, keep it natural
+        parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+    return " and ".join(parts) if parts else "0 seconds"
+
+
+def _alarm_fire():
+    global alarm_ringing
+    alarm_ringing = True
+    print("\n*** TIMER FINISHED ***")
+
+
+def execute_set_timer(seconds):
+    global active_timer, alarm_ringing
+
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return "I didn't understand how long to set the timer for."
+
+    if seconds <= 0:
+        return "That's not a valid amount of time for a timer."
+
+    if active_timer:
+        active_timer.cancel()
+
+    alarm_ringing = False
+    active_timer = threading.Timer(seconds, _alarm_fire)
+    active_timer.daemon = True
+    active_timer.start()
+
+    return f"Timer set for {format_duration(seconds)}."
+
+
+def execute_cancel_timer():
+    global active_timer, alarm_ringing
+
+    if alarm_ringing:
+        alarm_ringing = False
+        return "Alarm stopped."
+
+    if active_timer:
+        active_timer.cancel()
+        active_timer = None
+        return "Timer canceled."
+
+    return "There's no timer running."
+
+
+def handle_alarm_ringing():
+    """Called from the main loop when a timer has fired. Plays an alarm
+    sound and announces it, then clears the flag."""
+    global alarm_ringing
+
+    print("Alarm ringing!")
+    for _ in range(3):
+        play_beep()
+        time.sleep(0.2)
+
+    speak_with_piper("Time's up! Your timer has finished.")
+    alarm_ringing = False
+
+
+def resample_audio(data, orig_rate=MIC_NATIVE_RATE, target_rate=TARGET_RATE):
+    audio = np.frombuffer(data, dtype=np.int16)
+    if len(audio) == 0:
+        return data
+    duration = len(audio) / orig_rate
+    target_len = max(1, int(duration * target_rate))
+    resampled = np.interp(
+        np.linspace(0, len(audio), target_len, endpoint=False),
+        np.arange(len(audio)),
+        audio
+    ).astype(np.int16)
+    return resampled.tobytes()
+
+
+def create_beep_sound():
+    if os.path.exists(BEEP_SOUND):
+        return
+
+    print("Creating beep sound file...")
+    try:
+        import math
+        import struct
+
+        SAMPLE_RATE = 44100
+        DURATION = 0.3
+        FREQUENCY = 880
+
+        with wave.open(BEEP_SOUND, 'w') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(SAMPLE_RATE)
+
+            for i in range(int(SAMPLE_RATE * DURATION)):
+                fade_factor = 1.0
+                if i < SAMPLE_RATE * 0.1:
+                    fade_factor = i / (SAMPLE_RATE * 0.1)
+                elif i > SAMPLE_RATE * (DURATION - 0.1):
+                    fade_factor = (SAMPLE_RATE * DURATION - i) / (SAMPLE_RATE * 0.1)
+
+                sample = fade_factor * 0.5 * math.sin(2 * math.pi * FREQUENCY * i / SAMPLE_RATE)
+                sample_int = int(sample * 32767)
+                wav_file.writeframes(struct.pack('<h', sample_int))
+
+        print(f"Beep sound created at {BEEP_SOUND}")
+    except Exception as e:
+        print(f"Could not create beep sound: {e}")
+
+
+def initialize_vosk():
+    global vosk_model, recognizer
+
+    if not os.path.exists(VOSK_MODEL_PATH):
+        print(f"Error: Vosk model not found at {VOSK_MODEL_PATH}")
+        print("Please download a Vosk model from https://alphacephei.com/vosk/models")
+        print("Example: vosk-model-small-en-us-0.15")
+        sys.exit(1)
+
+    vosk_model = Model(VOSK_MODEL_PATH)
+    recognizer = KaldiRecognizer(vosk_model, TARGET_RATE)
+    print("Vosk model loaded successfully")
+    print(f"Listening for wake words: {', '.join(WAKE_WORDS)}")
+
+
+def start_thinking_sound():
+    proc = subprocess.Popen(
+        ["paplay", THINKING_SOUND],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    return proc
+
+
+def stop_thinking_sound(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=0.3)
+        except:
+            proc.kill()
+
+
+def play_beep():
+    try:
+        if os.path.exists(BEEP_SOUND):
+            subprocess.run(
+                ["paplay", BEEP_SOUND],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        else:
+            subprocess.run(
+                ["play", "-q", "-n", "synth", "0.3", "sine", "880"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+    except FileNotFoundError:
+        try:
+            subprocess.run(
+                ["speaker-test", "-t", "sine", "-f", "880", "-l", "1"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=0.3
+            )
+        except:
+            print("\a", end='', flush=True)
+    except Exception as e:
+        print(f"Could not play beep: {e}")
+        print("\a", end='', flush=True)
+
+
+def speak_with_piper(text):
+    thinking_proc = None
+
+    try:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+            tmp.write(text)
+            tmp_path = tmp.name
+
+        thinking_proc = start_thinking_sound()
+
+        piper_process = subprocess.Popen([
+            "piper",
+            "-m", MODEL_PATH,
+            "-c", CONFIG_PATH,
+            "-i", tmp_path,
+            "-f", OUTPUT_WAV
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        while piper_process.poll() is None:
+            if thinking_proc.poll() is not None:
+                thinking_proc = start_thinking_sound()
+            time.sleep(0.1)
+
+        piper_process.wait()
+
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+
+        if thinking_proc:
+            stop_thinking_sound(thinking_proc)
+
+    time.sleep(0.2)
+
+    subprocess.run(["paplay", OUTPUT_WAV])
+
+
+def check_wake_word(text):
+    text_lower = text.lower().strip()
+    for wake_word in WAKE_WORDS:
+        if wake_word in text_lower:
+            return True
+    return False
+
+
+def listen_for_command(timeout_seconds=10):
+    global is_listening
+
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,
+                    channels=1,
+                    rate=MIC_NATIVE_RATE,
+                    input=True,
+                    input_device_index=MIC_DEVICE_INDEX,
+                    frames_per_buffer=FRAMES_PER_BUFFER)
+    stream.start_stream()
+
+    print("\nListening for command...")
+
+    start_time = time.time()
+    silence_start = None
+    speech_detected = False
+    final_text = ""
+
+    recognizer.Reset()
+
+    while is_listening:
+        if time.time() - start_time > timeout_seconds:
+            print("Timeout - no command detected")
+            break
+
+        raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
+        data = resample_audio(raw_data)
+
+        if recognizer.AcceptWaveform(data):
+            result = json.loads(recognizer.Result())
+            if result.get("text", "").strip():
+                final_text = result["text"]
+                speech_detected = True
+                print(f"Command: {final_text}")
+                break
+        else:
+            partial_result = json.loads(recognizer.PartialResult())
+            partial_text = partial_result.get("partial", "")
+            if partial_text:
+                silence_start = None
+                if not speech_detected:
+                    speech_detected = True
+                    print(f"Command: {partial_text}", end='\r')
+            elif speech_detected and silence_start is None:
+                silence_start = time.time()
+            elif silence_start and time.time() - silence_start > 1.5:
+                result = json.loads(recognizer.FinalResult())
+                final_text = result.get("text", "")
+                if final_text:
+                    print(f"Command: {final_text}")
+                break
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+    return final_text.strip()
+
+
+def continuous_listen_for_wake_word():
+    global is_listening, wake_word_detected
+
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,
+                    channels=1,
+                    rate=MIC_NATIVE_RATE,
+                    input=True,
+                    input_device_index=MIC_DEVICE_INDEX,
+                    frames_per_buffer=FRAMES_PER_BUFFER)
+    stream.start_stream()
+
+    print("\nAlways listening for wake word...")
+    print(f"Say one of: {', '.join(WAKE_WORDS)}")
+
+    recognizer.Reset()
+
+    while is_listening:
+        if alarm_ringing:
+            print("\nAlarm detected while listening for wake word - breaking to handle it")
+            break
+
+        try:
+            raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
+            data = resample_audio(raw_data)
+
+            if recognizer.AcceptWaveform(data):
+                result = json.loads(recognizer.Result())
+                text = result.get("text", "").strip()
+
+                if text and check_wake_word(text):
+                    print(f"\nWake word detected: '{text}'")
+                    play_beep()
+                    wake_word_detected = True
+                    recognizer.Reset()
+                    break
+
+            partial_result = json.loads(recognizer.PartialResult())
+            partial_text = partial_result.get("partial", "").lower()
+
+            if partial_text and any(wake_word in partial_text for wake_word in WAKE_WORDS):
+                time.sleep(0.1)
+                result = json.loads(recognizer.FinalResult())
+                final_text = result.get("text", "").strip()
+
+                if final_text and check_wake_word(final_text):
+                    print(f"\nWake word detected: '{final_text}'")
+                    play_beep()
+                    wake_word_detected = True
+                    recognizer.Reset()
+                    break
+
+        except Exception as e:
+            print(f"Audio error: {e}")
+            time.sleep(0.1)
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+
+def process_with_llm(user_input):
+    global LAST_TOOL_CALLED
+    LAST_TOOL_CALLED = ""
+    thinking_proc = start_thinking_sound()
+
+    response_text = ""
+    try:
+        response = ollama.chat(
+            model="qwen2.5:1.5b",
+            keep_alive=-1,
+            messages=[{
+                "role": "user",
+                "content": user_input
+            }],
+            tools=TOOLS,
+        )
+
+        message = response.get("message", {})
+        tool_calls = message.get("tool_calls")
+
+        if tool_calls:
+            for call in tool_calls:
+                fn_name = call["function"]["name"]
+                args = call["function"].get("arguments", {})
+                print(f"Tool call: {fn_name}({args})")
+                LAST_TOOL_CALLED = fn_name
+
+                if fn_name == "move_robot":
+                    direction = args.get("direction", "stop")
+                    duration = args.get("duration", 1.0)
+                    execute_move(direction, duration)
+                    if direction == "stop":
+                        response_text = "Stopping."
+                    else:
+                        response_text = f"Moving {direction}."
+                elif fn_name == "set_mode":
+                    mode = args.get("mode", "manual")
+                    execute_set_mode(mode)
+                    response_text = f"Switched to {mode} mode."
+                elif fn_name == "get_outdoor_weather":
+                    response_text = get_outdoor_weather()
+                elif fn_name == "get_room_temperature":
+                    response_text = get_room_temperature()
+                elif fn_name == "get_current_time":
+                    response_text = get_current_time()
+                elif fn_name == "get_current_date":
+                    response_text = get_current_date()
+                elif fn_name == "set_timer":
+                    seconds = args.get("seconds", 0)
+                    response_text = execute_set_timer(seconds)
+                elif fn_name == "cancel_timer":
+                    response_text = execute_cancel_timer()
+                elif fn_name == "control_light":
+                    state = args.get("state", "off")
+                    execute_light(state)
+                    response_text = f"Turning the light {state}."
+                else:
+                    response_text = "I tried to do something but wasn't sure what."
+        else:
+            response_text = (message.get("content") or "").strip()
+            if not response_text:
+                response_text = "I didn't have a response for that."
+
+    except Exception as e:
+        print(f"Error with LLM: {e}")
+        response_text = "I encountered an error processing your request."
+
+    finally:
+        stop_thinking_sound(thinking_proc)
+
+    return response_text.strip()
+
+
+def main():
+    global is_listening, wake_word_detected, CURRENT_CONDITION
+
+    print("=" * 50)
+    print("Voice Assistant with Wake Word + Robot Control")
+    print("=" * 50)
+    print(f"\nWake words: {', '.join(WAKE_WORDS)}")
+    print("\nThe assistant is always listening...")
+    print("Say a wake word followed by your command")
+    print("Examples: 'hey assistant move forward'")
+    print("          'hey assistant turn left for 3 seconds'")
+    print("          'hey assistant switch to autonomous mode'")
+    print("          'hello assistant what time is it'")
+    print("\nPress Ctrl+C to exit")
+    print("-" * 50)
+
+    create_beep_sound()
+    initialize_vosk()
+    init_esp_connection()
+    init_mqtt()
+    init_latency_log()
+
+    is_listening = True
+
+    try:
+        while is_listening:
+            wake_word_detected = False
+            continuous_listen_for_wake_word()
+
+            if not is_listening:
+                break
+
+            if alarm_ringing:
+                handle_alarm_ringing()
+                continue
+
+            if wake_word_detected:
+                time.sleep(0.3)
+
+                stt_start = time.time()
+                command = listen_for_command(timeout_seconds=10)
+                stt_elapsed = time.time() - stt_start
+
+                if not command:
+                    print("No command detected. Going back to sleep.\n")
+                    continue
+
+                if command.lower() in ["exit", "quit", "stop listening", "goodbye"]:
+                    print("\nGoodbye!")
+                    is_listening = False
+                    break
+
+                print(f"\nProcessing: {command}")
+
+                llm_start = time.time()
+                response = process_with_llm(command)
+                llm_elapsed = time.time() - llm_start
+
+                tts_elapsed = 0.0
+                if response:
+                    print(f"\nResponse: {response}")
+
+                    time.sleep(0.1)
+                    tts_start = time.time()
+                    speak_with_piper(response)
+                    tts_elapsed = time.time() - tts_start
+
+                total_elapsed = stt_elapsed + llm_elapsed + tts_elapsed
+                log_latency(
+                    command_text=command,
+                    condition=CURRENT_CONDITION,
+                    stt_s=stt_elapsed,
+                    llm_s=llm_elapsed,
+                    tts_s=tts_elapsed,
+                    total_s=total_elapsed,
+                    tool_called=LAST_TOOL_CALLED,
+                )
+                CURRENT_CONDITION = "warm"  # only the very first turn counts as "cold"
+
+                print("\n" + "-" * 50)
+                print("Back to listening for wake word...\n")
+
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user. Goodbye!")
+    except Exception as e:
+        print(f"\nError: {e}")
+    finally:
+        is_listening = False
+        if esp_serial:
+            try:
+                esp_serial.write(b'V')  # safety stop on exit
+                esp_serial.close()
+            except:
+                pass
+
+
+if __name__ == "__main__":
+    def signal_handler(sig, frame):
+        print("\nShutting down...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nGoodbye!")
+    except Exception as e:
+        print(f"\nFatal error: {e}")
