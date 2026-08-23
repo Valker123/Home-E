@@ -37,33 +37,33 @@ void stopMotors() {
 }
 
 void driveForward(int speed) {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    digitalWrite(IN3, HIGH);
-    digitalWrite(IN4, LOW);
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
     setMotorSpeed(speed, speed);
 }
 
 void driveBackward(int speed) {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, HIGH);
-    digitalWrite(IN3, LOW);
-    digitalWrite(IN4, HIGH);
-    setMotorSpeed(speed, speed);
-}
-
-void turnLeft(int speed) {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, HIGH);
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
     setMotorSpeed(speed, speed);
 }
 
-void turnRight(int speed) {
+void turnLeft(int speed) {
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, HIGH);
+    setMotorSpeed(speed, speed);
+}
+
+void turnRight(int speed) {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
     setMotorSpeed(speed, speed);
 }
