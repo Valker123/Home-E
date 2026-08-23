@@ -54,7 +54,7 @@ bool ObstacleAvoidance() {
   }
 
   // Obstacle detection (< 20 cm)
-  if (avgDistance > 0 && avgDistance < 20.0) {
+  if (avgDistance > 0 && avgDistance < 50.0) {
     stopMotors();
     delay(100);
 
