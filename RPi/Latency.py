@@ -236,6 +236,7 @@ TOOLS = [
 
 vosk_model = None
 recognizer = None
+wake_recognizer = None
 is_listening = False
 wake_word_detected = False
 esp_serial = None
@@ -562,7 +563,7 @@ def create_beep_sound():
 
 
 def initialize_vosk():
-    global vosk_model, recognizer
+    global vosk_model, recognizer, wake_recognizer
 
     if not os.path.exists(VOSK_MODEL_PATH):
         print(f"Error: Vosk model not found at {VOSK_MODEL_PATH}")
@@ -571,7 +572,14 @@ def initialize_vosk():
         sys.exit(1)
 
     vosk_model = Model(VOSK_MODEL_PATH)
+
+    # Regular recognizer - open vocabulary, used for actual commands
     recognizer = KaldiRecognizer(vosk_model, TARGET_RATE)
+
+    # Grammar-constrained recognizer - only for wake word detection
+    grammar = json.dumps(WAKE_WORDS + ["[unk]"])
+    wake_recognizer = KaldiRecognizer(vosk_model, TARGET_RATE, grammar)
+
     print("Vosk model loaded successfully")
     print(f"Listening for wake words: {', '.join(WAKE_WORDS)}")
 
@@ -716,7 +724,7 @@ def listen_for_command(timeout_seconds=10):
                     print(f"Command: {partial_text}", end='\r')
             elif speech_detected and silence_start is None:
                 silence_start = time.time()
-            elif silence_start and time.time() - silence_start > 1.5:
+            elif silence_start and time.time() - silence_start > 3:
                 result = json.loads(recognizer.FinalResult())
                 final_text = result.get("text", "")
                 if final_text:
@@ -745,7 +753,7 @@ def continuous_listen_for_wake_word():
     print("\nAlways listening for wake word...")
     print(f"Say one of: {', '.join(WAKE_WORDS)}")
 
-    recognizer.Reset()
+    wake_recognizer.Reset()
 
     while is_listening:
         if alarm_ringing:
@@ -756,30 +764,30 @@ def continuous_listen_for_wake_word():
             raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
             data = resample_audio(raw_data)
 
-            if recognizer.AcceptWaveform(data):
-                result = json.loads(recognizer.Result())
+            if wake_recognizer.AcceptWaveform(data):
+                result = json.loads(wake_recognizer.Result())
                 text = result.get("text", "").strip()
 
                 if text and check_wake_word(text):
                     print(f"\nWake word detected: '{text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()
+                    wake_recognizer.Reset()
                     break
 
-            partial_result = json.loads(recognizer.PartialResult())
+            partial_result = json.loads(wake_recognizer.PartialResult())
             partial_text = partial_result.get("partial", "").lower()
 
             if partial_text and any(wake_word in partial_text for wake_word in WAKE_WORDS):
                 time.sleep(0.1)
-                result = json.loads(recognizer.FinalResult())
+                result = json.loads(wake_recognizer.FinalResult())
                 final_text = result.get("text", "").strip()
 
                 if final_text and check_wake_word(final_text):
                     print(f"\nWake word detected: '{final_text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()
+                    wake_recognizer.Reset()
                     break
 
         except Exception as e:
@@ -804,6 +812,7 @@ def process_with_llm(user_input):
             messages=[{
                 "role": "user",
                 "content": user_input
+                + " Respond as concisely as possible (preferably one sentence long)."
             }],
             tools=TOOLS,
         )
@@ -901,7 +910,8 @@ def main():
                 continue
 
             if wake_word_detected:
-                time.sleep(0.3)
+                time.sleep(0.5)
+                play_beep()
 
                 stt_start = time.time()
                 command = listen_for_command(timeout_seconds=10)
