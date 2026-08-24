@@ -10,13 +10,13 @@ import pyaudio
 import serial
 import requests
 import threading
-import paho.mqtt.client as mqtt
 import csv
 from datetime import datetime
 from vosk import Model, KaldiRecognizer
 import sys
 import numpy as np
 from collections import deque
+import threading
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -30,10 +30,10 @@ OUTPUT_WAV = os.path.join(BASE_DIR, "test.wav")
 THINKING_SOUND = os.path.join(BASE_DIR, "process.wav")
 VOSK_MODEL_PATH = os.path.join(BASE_DIR, "vosk-model-small-en-us-0.15")
 BEEP_SOUND = os.path.join(BASE_DIR, "beep.wav")
-WAKE_WORDS = ["hey assistant", "hello assistant", "okay assistant", "assistant"]
+WAKE_WORDS = ["hey homie", "hello homie", "okay homie", "homie", "homey", "assistant"]
 
 # --- Mic settings ---
-MIC_DEVICE_INDEX = 1          # USB PnP Sound Device
+MIC_DEVICE_INDEX = 2          # USB PnP Sound Device
 MIC_NATIVE_RATE = 44100       # what the USB mic actually supports
 TARGET_RATE = 16000           # what Vosk needs
 CHUNK_AT_TARGET = 4000
@@ -44,11 +44,7 @@ FRAMES_PER_BUFFER = int(8000 * MIC_NATIVE_RATE / TARGET_RATE)
 ESP_PORT = "/dev/ttyUSB0"
 ESP_BAUD = 115200
 
-# --- MQTT settings (Pi runs the broker itself, via Mosquitto) ---
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
-MQTT_LIGHT_SET_TOPIC = "home/light/set"
-MQTT_LIGHT_STATE_TOPIC = "home/light/state"
+
 
 DIRECTION_TO_COMMAND = {
     "forward": b'W',
@@ -236,6 +232,7 @@ TOOLS = [
 
 vosk_model = None
 recognizer = None
+wake_recognizer = None
 is_listening = False
 wake_word_detected = False
 esp_serial = None
@@ -245,35 +242,8 @@ mqtt_client = None
 active_timer = None
 alarm_ringing = False
 
-
-def on_mqtt_message(client, userdata, msg):
-    # Logs status updates the light ESP32 publishes back (e.g. after a manual
-    # physical toggle, if you ever wire that up) — not required for basic
-    # on/off control, but useful for debugging and future expansion.
-    print(f"MQTT message on {msg.topic}: {msg.payload.decode()}")
-
-
-def init_mqtt():
-    global mqtt_client
-    try:
-        mqtt_client = mqtt.Client()
-        mqtt_client.on_message = on_mqtt_message
-        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-        mqtt_client.subscribe(MQTT_LIGHT_STATE_TOPIC)
-        mqtt_client.loop_start()  # background thread handles the connection
-        print(f"MQTT connected to broker at {MQTT_BROKER}:{MQTT_PORT}")
-    except Exception as e:
-        print(f"Could not connect to MQTT broker ({e}). Light control will be skipped.")
-        mqtt_client = None
-
-
-def execute_light(state):
-    if mqtt_client is None:
-        print(f"[No MQTT connection] Would set light: {state}")
-        return
-    mqtt_client.publish(MQTT_LIGHT_SET_TOPIC, state)
-    print(f"Published to {MQTT_LIGHT_SET_TOPIC}: {state}")
-
+# Tracks whether Qwen's tool-calling warm-up has finished
+qwen_ready = threading.Event()
 
 def init_latency_log():
     """Creates latency_log.csv with a header row if it doesn't already exist.
@@ -562,7 +532,7 @@ def create_beep_sound():
 
 
 def initialize_vosk():
-    global vosk_model, recognizer
+    global vosk_model, recognizer, wake_recognizer
 
     if not os.path.exists(VOSK_MODEL_PATH):
         print(f"Error: Vosk model not found at {VOSK_MODEL_PATH}")
@@ -571,7 +541,14 @@ def initialize_vosk():
         sys.exit(1)
 
     vosk_model = Model(VOSK_MODEL_PATH)
+
+    # Regular recognizer - open vocabulary, used for actual commands
     recognizer = KaldiRecognizer(vosk_model, TARGET_RATE)
+
+    # Grammar-constrained recognizer - only for wake word detection
+    grammar = json.dumps(WAKE_WORDS + ["[unk]"])
+    wake_recognizer = KaldiRecognizer(vosk_model, TARGET_RATE, grammar)
+
     print("Vosk model loaded successfully")
     print(f"Listening for wake words: {', '.join(WAKE_WORDS)}")
 
@@ -624,14 +601,10 @@ def play_beep():
 
 
 def speak_with_piper(text):
-    thinking_proc = None
-
     try:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
             tmp.write(text)
             tmp_path = tmp.name
-
-        thinking_proc = start_thinking_sound()
 
         piper_process = subprocess.Popen([
             "piper",
@@ -641,11 +614,6 @@ def speak_with_piper(text):
             "-f", OUTPUT_WAV
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        while piper_process.poll() is None:
-            if thinking_proc.poll() is not None:
-                thinking_proc = start_thinking_sound()
-            time.sleep(0.1)
-
         piper_process.wait()
 
     finally:
@@ -653,9 +621,6 @@ def speak_with_piper(text):
             os.unlink(tmp_path)
         except:
             pass
-
-        if thinking_proc:
-            stop_thinking_sound(thinking_proc)
 
     time.sleep(0.2)
 
@@ -670,7 +635,7 @@ def check_wake_word(text):
     return False
 
 
-def listen_for_command(timeout_seconds=10):
+def listen_for_command(timeout_seconds=15):
     global is_listening
 
     p = pyaudio.PyAudio()
@@ -716,7 +681,7 @@ def listen_for_command(timeout_seconds=10):
                     print(f"Command: {partial_text}", end='\r')
             elif speech_detected and silence_start is None:
                 silence_start = time.time()
-            elif silence_start and time.time() - silence_start > 1.5:
+            elif silence_start and time.time() - silence_start > 3:
                 result = json.loads(recognizer.FinalResult())
                 final_text = result.get("text", "")
                 if final_text:
@@ -745,7 +710,7 @@ def continuous_listen_for_wake_word():
     print("\nAlways listening for wake word...")
     print(f"Say one of: {', '.join(WAKE_WORDS)}")
 
-    recognizer.Reset()
+    wake_recognizer.Reset()
 
     while is_listening:
         if alarm_ringing:
@@ -756,30 +721,30 @@ def continuous_listen_for_wake_word():
             raw_data = stream.read(CHUNK_AT_NATIVE, exception_on_overflow=False)
             data = resample_audio(raw_data)
 
-            if recognizer.AcceptWaveform(data):
-                result = json.loads(recognizer.Result())
+            if wake_recognizer.AcceptWaveform(data):
+                result = json.loads(wake_recognizer.Result())
                 text = result.get("text", "").strip()
 
                 if text and check_wake_word(text):
                     print(f"\nWake word detected: '{text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()
+                    wake_recognizer.Reset()
                     break
 
-            partial_result = json.loads(recognizer.PartialResult())
+            partial_result = json.loads(wake_recognizer.PartialResult())
             partial_text = partial_result.get("partial", "").lower()
 
             if partial_text and any(wake_word in partial_text for wake_word in WAKE_WORDS):
                 time.sleep(0.1)
-                result = json.loads(recognizer.FinalResult())
+                result = json.loads(wake_recognizer.FinalResult())
                 final_text = result.get("text", "").strip()
 
                 if final_text and check_wake_word(final_text):
                     print(f"\nWake word detected: '{final_text}'")
                     play_beep()
                     wake_word_detected = True
-                    recognizer.Reset()
+                    wake_recognizer.Reset()
                     break
 
         except Exception as e:
@@ -798,15 +763,26 @@ def process_with_llm(user_input):
 
     response_text = ""
     try:
+        print(">>> BEFORE ollama.chat")
+        qwen_start = time.time()
+
         response = ollama.chat(
             model="qwen2.5:1.5b",
             keep_alive=-1,
-            messages=[{
-                "role": "user",
-                "content": user_input
-            }],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "If the user's request matches an available tool, call that tool directly. Only respond with plain text if no tool applies, and in that case keep your response to one short sentence."
+                },
+                {
+                    "role": "user",
+                    "content": user_input
+                }
+            ],
             tools=TOOLS,
         )
+
+        print(f">>> AFTER ollama.chat: {time.time() - qwen_start:.3f}s")
 
         message = response.get("message", {})
         tool_calls = message.get("tool_calls")
@@ -863,6 +839,24 @@ def process_with_llm(user_input):
 
     return response_text.strip()
 
+def warm_up_qwen():
+    try:
+        print("\nStarting Qwen model warm-up...")
+
+        result = subprocess.run(
+            ["python3", os.path.join(BASE_DIR, "warm_ollama_tools.py")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+
+        print(result.stdout)
+        print("Qwen warm-up finished.")
+        qwen_ready.set()
+
+    except Exception as e:
+        print(f"Qwen warm-up failed: {e}")
+        qwen_ready.set()
 
 def main():
     global is_listening, wake_word_detected, CURRENT_CONDITION
@@ -879,11 +873,12 @@ def main():
     print("          'hello assistant what time is it'")
     print("\nPress Ctrl+C to exit")
     print("-" * 50)
+    qwen_thread = threading.Thread(target=warm_up_qwen, daemon=True)
+    qwen_thread.start()
 
     create_beep_sound()
     initialize_vosk()
     init_esp_connection()
-    init_mqtt()
     init_latency_log()
 
     is_listening = True
@@ -901,7 +896,8 @@ def main():
                 continue
 
             if wake_word_detected:
-                time.sleep(0.3)
+                time.sleep(0.5)
+                play_beep()
 
                 stt_start = time.time()
                 command = listen_for_command(timeout_seconds=10)
@@ -917,7 +913,11 @@ def main():
                     break
 
                 print(f"\nProcessing: {command}")
-
+                if not qwen_ready.is_set():
+                    print("Qwen is still warming up. Please wait...")
+                    qwen_ready.wait()
+                    print("Qwen is ready.")
+                    
                 llm_start = time.time()
                 response = process_with_llm(command)
                 llm_elapsed = time.time() - llm_start
