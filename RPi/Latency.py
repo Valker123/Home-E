@@ -11,6 +11,7 @@ import serial
 import requests
 import threading
 import csv
+import paho.mqtt.client as mqtt
 from datetime import datetime
 from vosk import Model, KaldiRecognizer
 import sys
@@ -40,10 +41,15 @@ CHUNK_AT_TARGET = 4000
 CHUNK_AT_NATIVE = int(CHUNK_AT_TARGET * MIC_NATIVE_RATE / TARGET_RATE)
 FRAMES_PER_BUFFER = int(8000 * MIC_NATIVE_RATE / TARGET_RATE)
 
-# --- ESP32 serial settings ---
+# --- ESP32 serial settings (robot base) ---
 ESP_PORT = "/dev/ttyUSB0"
 ESP_BAUD = 115200
 
+# --- MQTT settings (light switch ESP32) ---
+MQTT_BROKER_HOST = "localhost"   # broker runs on this same Pi (mosquitto)
+MQTT_BROKER_PORT = 1883
+MQTT_TOPIC_LIGHT = "home-light-set"
+MQTT_KEEPALIVE = 60
 
 
 DIRECTION_TO_COMMAND = {
@@ -236,9 +242,7 @@ wake_recognizer = None
 is_listening = False
 wake_word_detected = False
 esp_serial = None
-
 mqtt_client = None
-
 active_timer = None
 alarm_ringing = False
 
@@ -288,6 +292,33 @@ def init_esp_connection():
     except Exception as e:
         print(f"Could not connect to ESP32 ({e}). Motor commands will be skipped.")
         esp_serial = None
+
+
+def init_mqtt():
+    """Connects to the local mosquitto broker used to talk to the
+    light-switch ESP32 over the home-light-set topic."""
+    global mqtt_client
+    try:
+        mqtt_client = mqtt.Client()
+        mqtt_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=MQTT_KEEPALIVE)
+        mqtt_client.loop_start()  # background thread handles the network loop
+        print(f"Connected to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
+    except Exception as e:
+        print(f"Could not connect to MQTT broker ({e}). Light commands will be skipped.")
+        mqtt_client = None
+
+
+def execute_light(state):
+    """Publishes 'on' or 'off' to home-light-set for the light-switch ESP32."""
+    if mqtt_client is None:
+        print(f"[No MQTT connection] Would set light: {state}")
+        return
+    payload = "on" if state == "on" else "off"
+    result = mqtt_client.publish(MQTT_TOPIC_LIGHT, payload)
+    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+        print(f"Published to {MQTT_TOPIC_LIGHT}: {payload}")
+    else:
+        print(f"Failed to publish light command (rc={result.rc})")
 
 
 def execute_move(direction, duration=1.0):
@@ -865,6 +896,7 @@ def main():
     print("          'hey assistant turn left for 3 seconds'")
     print("          'hey assistant switch to autonomous mode'")
     print("          'hello assistant what time is it'")
+    print("          'hey homie turn on the light switch'")
     print("\nPress Ctrl+C to exit")
     print("-" * 50)
     qwen_thread = threading.Thread(target=warm_up_qwen, daemon=True)
@@ -873,6 +905,7 @@ def main():
     create_beep_sound()
     initialize_vosk()
     init_esp_connection()
+    init_mqtt()
     init_latency_log()
 
     is_listening = True
@@ -952,6 +985,12 @@ def main():
             try:
                 esp_serial.write(b'V')  # safety stop on exit
                 esp_serial.close()
+            except:
+                pass
+        if mqtt_client:
+            try:
+                mqtt_client.loop_stop()
+                mqtt_client.disconnect()
             except:
                 pass
 
