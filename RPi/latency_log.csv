@@ -142,3 +142,66 @@ timestamp,command_text,condition,stt_seconds,llm_seconds,tts_seconds,total_secon
 2026-08-23 20:49:14,what time is it,cold,7.332,7.530,8.708,23.569,get_current_time
 2026-08-23 20:56:13,what time is it right now,cold,4.301,7.267,8.837,20.406,get_current_time
 2026-08-23 21:03:08,what time is it right now,cold,7.608,142.843,11.051,161.502,get_current_time
+2026-08-25 01:16:49,forward for one second,cold,4.369,11.498,9.067,24.934,move_robot
+2026-08-25 01:17:33,hey,warm,7.394,4.832,9.003,21.229,
+2026-08-26 11:37:07,turn off the light,cold,4.894,8.577,11.060,24.531,control_light
+2026-08-26 11:38:04,what's today's it,warm,3.330,7.910,10.822,22.062,get_current_date
+2026-08-26 11:46:44,what time is it,cold,5.084,110.411,9.108,124.603,get_current_time
+2026-08-26 11:47:24,he turned off the light,warm,8.887,9.100,7.496,25.483,control_light
+2026-08-26 11:48:43,what's that,warm,2.271,17.359,21.194,40.825,
+2026-08-26 11:50:37,here it off the life,warm,8.911,8.716,7.306,24.933,control_light
+2026-08-26 11:51:47,turn on the lights,cold,3.908,8.651,7.548,20.107,control_light
+2026-08-26 11:59:55,turn off the way,cold,4.336,8.550,7.359,20.245,control_light
+2026-08-26 12:00:29,turn on the way,warm,4.763,8.427,7.171,20.361,control_light
+2026-08-26 12:00:54,turn off the way,warm,3.787,8.376,7.322,19.484,control_light
+2026-08-26 12:01:21,can you turn on red light,warm,4.833,8.762,7.489,21.083,control_light
+2026-08-26 12:01:51,turn off the light,warm,2.766,8.550,7.291,18.608,control_light
+2026-08-26 12:02:30,turn on the white,warm,5.353,8.403,7.141,20.897,control_light
+2026-08-26 12:03:32,turn off the light,warm,4.288,8.387,7.212,19.887,control_light
+2026-08-27 17:54:08,what time is it,cold,4.940,112.509,10.883,128.332,get_current_time
+2026-08-27 17:54:54,her lap,warm,1.815,9.728,14.033,25.575,
+2026-08-27 17:55:24,turn left for one second,warm,5.387,11.637,7.220,24.243,move_robot
+2026-08-27 17:55:53,turn left her one second,warm,4.285,11.403,7.163,22.850,move_robot
+2026-08-27 17:56:21,but for one second,warm,2.780,11.769,7.215,21.765,move_robot
+2026-08-27 17:56:53,he turned left for one second,warm,7.813,11.653,7.126,26.592,move_robot
+2026-08-27 17:57:23,turn left for one second,warm,4.248,11.522,7.177,22.946,move_robot
+2026-08-27 17:57:55,turn right for one second,warm,3.775,11.394,7.098,22.267,move_robot
+2026-08-27 17:58:23,turn right for one second,warm,3.910,10.502,7.106,21.519,move_robot
+2026-08-27 17:58:52,turn right for one second,warm,3.821,10.570,6.934,21.326,move_robot
+2026-08-27 17:59:25,turner right for one second,warm,3.799,12.356,7.027,23.182,move_robot
+2026-08-27 18:00:04,switch to economists mode,warm,5.328,12.481,7.766,25.575,set_mode
+2026-08-27 18:00:35,he switched to autonomous mode,warm,8.774,8.789,7.372,24.936,set_mode
+2026-08-27 18:01:22,ta da,warm,6.976,14.633,19.696,41.305,
+2026-08-27 18:03:37,switch to audio mode,cold,4.932,16.204,7.767,28.903,set_mode
+2026-08-27 18:04:14,thought the modem,warm,4.310,11.842,15.237,31.388,
+2026-08-27 18:05:22,switch to auto mode,cold,4.548,8.895,7.778,21.222,set_mode
+2026-08-27 18:06:33,switch to a time in this mode,cold,4.800,14.674,17.082,36.555,
+2026-08-27 18:07:17,switch to auto mode,warm,4.276,10.639,8.228,23.143,set_mode
+2026-08-27 18:07:49,switched to autonomous mode,warm,5.305,13.183,7.636,26.125,set_mode
+2026-08-27 18:08:31,switch to autonomous off the called detection mode,cold,7.309,9.718,7.630,24.656,set_mode
+2026-08-27 18:09:05,got your modem,warm,6.825,8.671,11.704,27.201,
+2026-08-27 18:10:07,switch to autonomous driving mode,cold,4.481,12.799,7.576,24.856,set_mode
+2026-08-27 18:11:37,switch to manual mode,cold,3.900,8.920,7.614,20.434,set_mode
+2026-08-27 18:12:02,switch to manual mode,warm,3.790,8.059,7.790,19.638,set_mode
+2026-08-27 18:12:30,manual mode,warm,2.343,12.209,7.696,22.248,set_mode
+2026-08-27 18:12:57,off the light,warm,2.407,8.893,7.651,18.952,control_light
+2026-08-27 18:13:23,turn on the light,warm,4.276,9.056,7.256,20.588,control_light
+2026-08-27 18:13:52,i turn off the light,warm,3.833,9.022,7.543,20.399,control_light
+2026-08-27 18:14:16,on the light,warm,2.297,8.823,7.398,18.518,control_light
+2026-08-27 18:14:42,turn the light off,warm,3.342,8.841,7.384,19.566,control_light
+2026-08-27 18:15:08,turn the light on,warm,4.276,8.427,7.289,19.992,control_light
+2026-08-27 18:15:33,turn the light off,warm,3.792,8.569,7.408,19.769,control_light
+2026-08-27 18:15:59,the light on,warm,2.298,9.286,7.843,19.426,control_light
+2026-08-27 18:16:27,it's today's date,warm,2.378,8.029,11.040,21.447,get_current_date
+2026-08-27 18:17:09,where kids,warm,2.288,14.047,17.511,33.846,
+2026-08-27 18:17:37,set a timer for five seconds,warm,4.334,9.548,8.217,22.099,set_timer
+2026-08-27 18:18:18,set a timer for ten seconds,warm,4.314,8.902,8.351,21.567,set_timer
+2026-08-27 18:19:04,set a timer for ten seconds,warm,3.860,8.401,8.184,20.445,set_timer
+2026-08-27 18:20:19,how far from the sun is the there,warm,4.857,22.565,23.956,51.378,
+2026-08-27 18:21:28,how far is the son from the earth,warm,5.431,24.885,32.482,62.798,
+2026-08-27 18:27:05,when does the nfl season starts,cold,4.470,31.817,37.068,73.354,
+2026-08-27 18:28:29,when does the n b a season start,warm,4.835,33.475,39.882,78.192,
+2026-08-27 18:29:32,move forward for three seconds and then move backwards for three seconds,warm,7.334,27.410,7.365,42.109,move_robot
+2026-08-27 18:30:36,whew for it for three seconds move backwards for three seconds and then move forward again for twenty seconds,warm,9.307,41.941,6.953,58.201,move_robot
+2026-08-27 18:31:19,move forward for three seconds and then tell me what time it is right now,warm,7.308,21.081,8.974,37.363,get_current_time
+2026-08-27 18:32:19,i guess it,warm,4.280,10.368,13.608,28.255,
