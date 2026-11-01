@@ -145,7 +145,3 @@ Constraining the wake-word recognizer's grammar reduced the average number of ac
 Proposed improvements include better microphone placement and noise handling, more reliable model initialization, refined tool descriptions and prompts, and more capable onboard compute for faster inference or larger models.
 
 The modular architecture could also support additional sensors, actuators, and MQTT peripherals. Home monitoring, care assistance, and baby or pet supervision are proposed applications that would require further development and validation.
-
-## Research Paper
-
-This README summarizes **“Home-E: A Mobile and Scalable AI-Enhanced Home Assistant.”** Hardware specifications and experimental results reflect the supplied manuscript. The paper covers the mechanical design, electronics, communication protocols, local AI pipeline, and experimental evaluation.
