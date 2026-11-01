@@ -2,17 +2,9 @@
 
 ### A Mobile and Scalable AI-Enhanced Home Assistant
 
-<p align="center">
-  <img src="Home-E Picture (1)(1).png" alt="Front view of the assembled orange Home-E robot" width="480">
-</p><p align="center"><em>Home-E's assembled 3D-printed body, display, and front-mounted sensors.</em></p>
-
-<p align="center"><em>Home-E's assembled 3D-printed body, display, and front-mounted sensors.</em></p>
-
 Home-E is a mobile robotic assistant that combines local speech recognition, language-model reasoning, and speech synthesis with physical movement and environmental sensing. Built around a Raspberry Pi 4 and an ESP32, it translates spoken requests into actions through a structured tool interface.
 
 The core voice interaction pipeline runs entirely on the Raspberry Pi. Outdoor weather queries use external APIs, while wireless peripheral control uses a local network.
-
-**[Project repository](https://github.com/Valker123/Home-E)**
 
 ## Features
 
