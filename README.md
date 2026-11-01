@@ -3,7 +3,9 @@
 ### A Mobile and Scalable AI-Enhanced Home Assistant
 
 <p align="center">
-  <img src="home-e-front.png" alt="Front view of the assembled orange Home-E robot" width="480">
+  <img src="https://raw.githubusercontent.com/Valker123/Home-E/main/home-e-front.png"
+       alt="Home-E robot"
+       width="480">
 </p>
 
 <p align="center"><em>Home-E's assembled 3D-printed body, display, and front-mounted sensors.</em></p>
@@ -55,7 +57,9 @@ Supported requests include movement, operating-mode changes, room temperature an
 ## Hardware
 
 <p align="center">
-  <img src="home-e-cad-overview.png" alt="Annotated CAD views of Home-E showing the chassis, motor mounts, Raspberry Pi enclosure, motor-control enclosure, and sensors" width="850">
+  <img src="https://raw.githubusercontent.com/Valker123/Home-E/main/home-e-cad-overview.png"
+       alt="Home-E CAD overview"
+       width="850">
 </p>
 
 *Annotated CAD overview showing the component layout from the front, back, bottom, and inside.*
